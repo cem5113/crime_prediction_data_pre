@@ -1,0 +1,196 @@
+name: Manual Step Runner (with fallback)
+
+on:
+  workflow_dispatch:
+    inputs:
+      step:
+        description: "Hangi adımı çalıştırayım?"
+        type: choice
+        options:
+          - full
+          - update_crime
+          - update_911
+          - update_311
+          - update_population
+          - update_bus
+          - update_train
+          - update_poi
+          - update_police_gov
+          - update_weather
+        default: full
+      persist:
+        description: "Çıktıyı nasıl saklayalım?"
+        type: choice
+        options: [artifact, commit, none]
+        default: artifact
+      py:
+        description: "Python sürümü"
+        type: choice
+        options: ["3.11","3.10"]
+        default: "3.11"
+
+permissions:
+  contents: write
+
+env:
+  CRIME_DATA_DIR: crime_prediction_data
+  GEOID_LEN: "11"
+  SOCS_APP_TOKEN: ${{ secrets.SOCS_APP_TOKEN }}
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with LFS)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Ensure LFS objects
+        run: |
+          git lfs install
+          git lfs pull
+          echo "Repo kök:"; ls -lah
+          echo "crime_prediction_data:"; ls -lah crime_prediction_data || true
+
+      # ---- En son BAŞARILI full pipeline artifact'ını indir (fallback için) ----
+      - name: Restore last-good snapshot (from Full SF Crime Pipeline)
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: full_pipeline.yml
+          workflow_conclusion: success
+          name: sf-crime-pipeline-output
+          path: last_good
+        continue-on-error: true
+
+      - name: Show last_good snapshot (if any)
+        run: |
+          if [ -d last_good ]; then
+            echo "last_good/ içeriği:"
+            ls -lah last_good || true
+            echo "last_good/crime_prediction_data/ içeriği:"
+            ls -lah last_good/crime_prediction_data || true
+          else
+            echo "last_good/ yok (daha önce başarılı full pipeline artifact bulunamadı)."
+          fi
+
+      - name: Ensure data dir
+        run: mkdir -p "${CRIME_DATA_DIR}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ github.event.inputs.py }}
+          cache: "pip"
+
+      - name: Install minimal deps
+        run: |
+          python -m pip install -U pip wheel setuptools
+          pip install pandas numpy requests holidays scipy scikit-learn joblib
+          pip install lightgbm xgboost || true
+
+      - name: Install geo stack if needed
+        if: ${{ contains('full,update_bus,update_train,update_poi,update_police_gov', github.event.inputs.step) }}
+        run: |
+          pip install geopandas shapely pyproj pyogrio rtree
+
+      - name: Sanity check inputs (ön-uyarı)
+        run: |
+          echo "Seçili adım: ${{ github.event.inputs.step }}"
+          echo "Mevcut dosyalar:"
+          ls -lah
+          echo "crime_prediction_data/"
+          ls -lah crime_prediction_data || true
+
+      # ---- ÇALIŞTIRMA (Hata → fallback → devam) ----
+      - name: Run selected step (with fallback)
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          copy_fallback() {
+            if [ -d last_good/crime_prediction_data ]; then
+              mkdir -p crime_prediction_data
+              cp -f last_good/crime_prediction_data/*.csv crime_prediction_data/ 2>/dev/null || true
+              cp -f last_good/crime_prediction_data/*.geojson crime_prediction_data/ 2>/dev/null || true
+              echo "ℹ️ Fallback: last_good/crime_prediction_data → crime_prediction_data/ kopyalandı."
+            elif [ -d last_good ]; then
+              mkdir -p crime_prediction_data
+              cp -f last_good/*.csv crime_prediction_data/ 2>/dev/null || true
+              cp -f last_good/*.geojson crime_prediction_data/ 2>/dev/null || true
+              echo "ℹ️ Fallback: last_good → crime_prediction_data/ kopyalandı."
+            else
+              echo "❌ Fallback mümkün değil: last_good/ yok."
+            fi
+          }
+
+          run_or_fallback() {
+            local label="$1"
+            shift
+            echo "▶️ ${label} başlıyor…"
+            if bash -lc "$*"; then
+              echo "✅ ${label} tamam."
+            else
+              echo "⚠️ ${label} FAILED. Falling back to last_good/ and continuing…"
+              copy_fallback
+            fi
+          }
+
+          run_full() {
+            run_or_fallback "01 update_crime"        "python -u update_crime.py"
+            run_or_fallback "02 update_911"          "python -u update_911.py"
+            run_or_fallback "03 update_311"          "if [ -f update_311.py ]; then python -u update_311.py; else python -u scripts/update_311.py; fi"
+            run_or_fallback "04 update_population"   "python -u update_population.py"
+            run_or_fallback "05 update_bus"          "python -u update_bus.py"
+            run_or_fallback "06 update_train"        "python -u update_train.py"
+            run_or_fallback "07 update_poi"          "if [ -f update_poi.py ]; then python -u update_poi.py; elif [ -f pipeline_make_sf_crime_06.py ]; then python -u pipeline_make_sf_crime_06.py; else echo 'POI adımı yok'; exit 2; fi"
+            run_or_fallback "08 update_police_gov"   "if [ -f update_police_gov.py ]; then python -u update_police_gov.py; elif [ -f scripts/enrich_police_gov_06_to_07.py ]; then python -u scripts/enrich_police_gov_06_to_07.py; else echo 'Polis/Gov adımı yok'; exit 2; fi"
+            run_or_fallback "09 update_weather"      "if [ -f update_weather.py ]; then python -u update_weather.py; else python -u scripts/update_weather.py; fi"
+          }
+
+          STEP="${{ github.event.inputs.step }}"
+          case "$STEP" in
+            full) run_full ;;
+            update_crime)        run_or_fallback "update_crime"        "python -u update_crime.py" ;;
+            update_911)          run_or_fallback "update_911"          "python -u update_911.py" ;;
+            update_311)          run_or_fallback "update_311"          "if [ -f update_311.py ]; then python -u update_311.py; else python -u scripts/update_311.py; fi" ;;
+            update_population)   run_or_fallback "update_population"   "python -u update_population.py" ;;
+            update_bus)          run_or_fallback "update_bus"          "python -u update_bus.py" ;;
+            update_train)        run_or_fallback "update_train"        "python -u update_train.py" ;;
+            update_poi)          run_or_fallback "update_poi"          "if [ -f update_poi.py ]; then python -u update_poi.py; elif [ -f pipeline_make_sf_crime_06.py ]; then python -u pipeline_make_sf_crime_06.py; else echo 'POI adımı yok'; exit 2; fi" ;;
+            update_police_gov)   run_or_fallback "update_police_gov"   "if [ -f update_police_gov.py ]; then python -u update_police_gov.py; elif [ -f scripts/enrich_police_gov_06_to_07.py ]; then python -u scripts/enrich_police_gov_06_to_07.py; else echo 'Polis/Gov adımı yok'; exit 2; fi" ;;
+            update_weather)      run_or_fallback "update_weather"      "if [ -f update_weather.py ]; then python -u update_weather.py; else python -u scripts/update_weather.py; fi" ;;
+            *) echo "Bilinmeyen step: $STEP"; exit 2 ;;
+          esac
+
+      - name: Quick preview (ilk satırlar)
+        run: |
+          echo "sf_crime_08.csv (varsa) – ilk 5 satır"
+          head -n 5 crime_prediction_data/sf_crime_08.csv || true
+
+      - name: Pack outputs
+        run: |
+          mkdir -p out
+          cp -f crime_prediction_data/*.csv out/ 2>/dev/null || true
+          cp -f *.csv out/ 2>/dev/null || true
+          cp -f crime_prediction_data/*.geojson out/ 2>/dev/null || true
+          ls -lah out || true
+
+      - name: Upload artifact (default)
+        if: ${{ github.event.inputs.persist == 'artifact' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-run-${{ github.run_id }}
+          path: out
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Commit & push (isteğe bağlı)
+        if: ${{ github.event.inputs.persist == 'commit' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "🧪 Dev run (with fallback): ${{ github.event.inputs.step }} (#${{ github.run_id }}) [skip ci]" || echo "No changes"
+          git push || echo "Nothing to push"
