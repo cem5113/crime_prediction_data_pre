@@ -1,0 +1,22 @@
+{
+  "bar": 1.69,
+  "school": 0.47,
+  "cafe": 1.13,
+  "supermarket": 0.87,
+  "bank": 0.96,
+  "place_of_worship": 0.62,
+  "university": 0.8,
+  "language_school": 3.0,
+  "convenience": 1.63,
+  "atm": 0.0,
+  "music_school": 1.41,
+  "fuel": 0.05,
+  "prep_school": 0.21,
+  "training": 0.15,
+  "supermarket;convenience": 0.5,
+  "hospital": 0.12,
+  "alcohol;convenience": 0.01,
+  "arts_centre": 0.02,
+  "cooking_school": 0.65,
+  "dancing_school": 0.08
+}
