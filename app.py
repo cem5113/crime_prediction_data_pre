@@ -77,21 +77,21 @@ def pick_url(key: str, default: str) -> str:
 
 CRIME_CSV_LATEST = pick_url(
     "CRIME_CSV_URL",
-    "https://github.com/cem5113/crime_prediction_data/releases/latest/download/sf_crime_y.csv",
+    "https://github.com/cem5113/crime_prediction_data_pre/releases/latest/download/sf_crime_y.csv",
 )
 
 RAW_911_URL = pick_url(
     "RAW_911_URL",
-    "https://github.com/cem5113/crime_prediction_data/releases/download/v1.0.1/sf_911_last_5_year_y.csv",
+    "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.1/sf_911_last_5_year_y.csv",
 )
 
 SF311_URL = pick_url(
     "SF311_URL",
-    "https://github.com/cem5113/crime_prediction_data/releases/download/v1.0.2/sf_311_last_5_years_y.csv",
+    "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.2/sf_311_last_5_years_y.csv",
 )
 
 # CSV-ONLY: Nüfus verisi yerel dosyadan okunacak
-DEFAULT_POP_CSV = str((Path(os.environ.get("CRIME_DATA_DIR", "crime_prediction_data")) / "sf_population.csv").resolve())
+DEFAULT_POP_CSV = str((Path(os.environ.get("CRIME_DATA_DIR", "crime_prediction_data_pre")) / "sf_population.csv").resolve())
 POPULATION_PATH = pick_url("POPULATION_PATH", DEFAULT_POP_CSV)
 
 # Güvenlik: URL verilirse reddet (CSV-only mod)
@@ -140,7 +140,7 @@ os.environ["DEMOG_WHITELIST"] = st.secrets.get(
 )
 
 # --- GitHub Actions entegrasyonu (manual tetik & artifact indirme) ---
-GITHUB_REPO = os.environ.get("GITHUB_REPO", "cem5113/crime_prediction_data")   # owner/repo
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "cem5113/crime_prediction_data_pre")   # owner/repo
 GITHUB_WORKFLOW = os.environ.get("GITHUB_WORKFLOW", "full_pipeline.yml")       # .github/workflows/...
 
 def _gh_headers():
@@ -166,7 +166,7 @@ def fetch_file_from_latest_artifact(pick_names: list[str], artifact_name="sf-cri
                 # sonuna/suffix'e bakarak eşle
                 for pick in pick_names:
                     # hem tam path hem de sadece dosya adı için dene
-                    candidates = [pick, f"crime_prediction_data/{pick}"]
+                    candidates = [pick, f"crime_prediction_data_pre/{pick}"]
                     for c in candidates:
                         if c in names:
                             return zf.read(c)
@@ -231,7 +231,7 @@ def fetch_latest_artifact_df() -> Optional[pd.DataFrame]:
                 if a.get("name") == "sf-crime-pipeline-output" and not a.get("expired", False):
                     dl = requests.get(a["archive_download_url"], headers=_gh_headers(), timeout=60)
                     zf = zipfile.ZipFile(io.BytesIO(dl.content))
-                    for pick in ("crime_prediction_data/sf_crime_08.csv", "sf_crime_08.csv"):
+                    for pick in ("crime_prediction_data_pre/sf_crime_08.csv", "sf_crime_08.csv"):
                         if pick in zf.namelist():
                             with zf.open(pick) as f:
                                 df = pd.read_csv(f, low_memory=False)
@@ -725,7 +725,7 @@ with st.sidebar:
             label="POPULATION_PATH (YEREL CSV YOLU)",
             value=str(pop_default or ""),
             key="population_path_in",
-            help="Örn: crime_prediction_data/sf_population.csv (URL kabul edilmez)."
+            help="Örn: crime_prediction_data_pre/sf_population.csv (URL kabul edilmez)."
         )
     
         # ENV’e yaz – doğrulamalar
@@ -748,7 +748,7 @@ try:
     ROOT = Path(__file__).resolve().parent
 except NameError:
     ROOT = Path.cwd()
-DATA_DIR = ROOT / "crime_prediction_data"
+DATA_DIR = ROOT / "crime_prediction_data_pre"
 SCRIPTS_DIR = ROOT / "scripts"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -769,7 +769,7 @@ DOWNLOADS = {
         "path": str(DATA_DIR / "sf_crime_y.csv"),
     },
     "Tahmin Grid Verisi (GEOID × Zaman + Y_label)": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_crime_grid_full_labeled.csv",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_crime_grid_full_labeled.csv",
         "path": str(DATA_DIR / "sf_crime_grid_full_labeled.csv"),
         "allow_artifact": True,
         "artifact_picks": ["sf_crime_grid_full_labeled.csv"],
@@ -783,15 +783,15 @@ DOWNLOADS = {
         "path": str(DATA_DIR / "sf_311_last_5_years_y.csv"),
     },
     "Otobüs Durakları": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_bus_stops_with_geoid.csv",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_bus_stops_with_geoid.csv",
         "path": str(DATA_DIR / "sf_bus_stops_with_geoid.csv"),
     },
     "Tren Durakları": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_train_stops_with_geoid.csv",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_train_stops_with_geoid.csv",
         "path": str(DATA_DIR / "sf_train_stops_with_geoid.csv"),
     },
     "POI GeoJSON": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_pois.geojson",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_pois.geojson",
         "path": str(DATA_DIR / "sf_pois.geojson"),
         "is_json": True,
     },
@@ -802,20 +802,20 @@ DOWNLOADS = {
         "is_local_csv": True,                # işaret
     },
     "POI Risk Skorları": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/risky_pois_dynamic.json",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/risky_pois_dynamic.json",
         "path": str(DATA_DIR / "risky_pois_dynamic.json"),
         "is_json": True,
     },
     "Polis İstasyonları": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_police_stations.csv",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_police_stations.csv",
         "path": str(DATA_DIR / "sf_police_stations.csv"),
     },
     "Devlet Binaları": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_government_buildings.csv",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_government_buildings.csv",
         "path": str(DATA_DIR / "sf_government_buildings.csv"),
     },
     "Hava Durumu": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_weather_5years_y.csv",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_weather_5years_y.csv",
         "path": str(DATA_DIR / "sf_weather_5years_y.csv"),
     },
 }
@@ -1086,7 +1086,7 @@ else:
 st.markdown("### 1.6) CSV → Parquet dönüştür")
 with st.expander("🔄 CSV’leri Parquet’e çevir (zstd)"):
     in_dir = st.text_input(
-        "Girdi klasörü", value=str(DATA_DIR), help="Örn: crime_prediction_data/"
+        "Girdi klasörü", value=str(DATA_DIR), help="Örn: crime_prediction_data_pre/"
     )
     out_dir = st.text_input(
         "Çıktı klasörü", value=str(ROOT / "parquet_out"), help="Örn: parquet_out/"
