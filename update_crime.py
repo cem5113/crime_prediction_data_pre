@@ -501,12 +501,25 @@ if "GEOID" in df_all.columns:
     df_all["GEOID"] = df_all["GEOID"].astype(str).str.extract(r"(\d+)")[0].str[:DEFAULT_GEOID_LEN]
 
 # 5y pencere + datetime
+# 5y pencere + datetime
 start_date_5y = today - timedelta(days=5*365)
-df_all = df_all[df_all["date"] >= start_date_5y]
 
+# Tarihi önce datetime tipine çevir
 df_all["date"] = pd.to_datetime(df_all["date"], errors="coerce")
+
+# Geçersiz tarihleri at
+df_all = df_all.dropna(subset=["date"])
+
+# Şimdi tarih bazında filtreleme güvenli
+df_all = df_all[df_all["date"].dt.date >= start_date_5y]
+
+# Saat işlemleri
 df_all["time"] = df_all["time"].astype(str).fillna("00:00:00")
-df_all["datetime"] = pd.to_datetime(df_all["date"].dt.strftime("%Y-%m-%d") + " " + df_all["time"], errors="coerce")
+
+# Tarih ve saati birleştir
+df_all["datetime"] = pd.to_datetime(
+    df_all["date"].dt.strftime("%Y-%m-%d") + " " + df_all["time"], errors="coerce"
+)
 df_all = df_all.dropna(subset=["datetime"]).copy()
 df_all["datetime"] = df_all["datetime"].dt.floor("h")
 
