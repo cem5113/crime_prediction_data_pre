@@ -158,6 +158,8 @@ jobs:
       # ---- PIPELINE ----
       - name: 01) Suç tabanı ve grid → sf_crime.csv + gridler
         if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
         run: |
           set -e
           python -u update_crime.py
@@ -417,70 +419,88 @@ jobs:
         env:
           CRIME_DIR: ${{ env.CRIME_DATA_DIR }}
           GRID_PATH: ${{ env.CRIME_DATA_DIR }}/sf_crime_events_enriched.csv
-          CRIME_PATH: ${{ env.CRIME_DATA_DIR }}/sf_crime.csv
+          # Not: CRIME_PATH env'e konuyor ama Python içinde aday araması yapılacak
+          CRIME_PATH_ENV: ${{ env.CRIME_DATA_DIR }}/sf_crime.csv
           OUT_PATH: ${{ env.CRIME_DATA_DIR }}/sf_crime_events_enriched.csv
         run: |
           set -e
           python - <<'PY'
-          import os, re, pandas as pd
-          CRIME_DIR  = os.environ["CRIME_DIR"]
-          GRID_PATH  = os.environ["GRID_PATH"]
-          CRIME_PATH = os.environ["CRIME_PATH"]
-          OUT_PATH   = os.environ["OUT_PATH"]
-
-          # 1) Olay dosyası: date & hour üret
+          import os, re
+          from pathlib import Path
+          import pandas as pd
+      
+          CRIME_DIR = os.environ["CRIME_DIR"]
+          GRID_PATH = os.environ["GRID_PATH"]
+          OUT_PATH  = os.environ["OUT_PATH"]
+      
+          # 1) sf_crime.csv'yi güvenli şekilde bul (env + yaygın klasörler)
+          candidates = [
+              Path(os.environ["CRIME_PATH_ENV"]),
+              Path(CRIME_DIR) / "sf_crime.csv",
+              Path("crime_prediction_data_pre") / "sf_crime.csv",
+              Path("crime_prediction_data") / "sf_crime.csv",
+              Path("sf_crime.csv"),
+          ]
+          cpath = next((p for p in candidates if p.exists()), None)
+          if cpath is None:
+              raise FileNotFoundError("sf_crime.csv not found in any known location")
+          CRIME_PATH = str(cpath)
+      
+          print(f"✅ sf_crime.csv bulundu: {CRIME_PATH}")
+          print(f"→ GRID_PATH: {GRID_PATH}")
+          print(f"→ OUT_PATH : {OUT_PATH}")
+      
+          # 2) Olay dosyası: date & hour üret
           df_e = pd.read_csv(CRIME_PATH, low_memory=False)
           cols = {c.lower(): c for c in df_e.columns}
-          # Tarih/saat alanını bul
-          ts_col = cols.get("timestamp") or cols.get("datetime") or cols.get("incident_datetime") or cols.get("date_time") or cols.get("date")
+          ts_col = (cols.get("timestamp") or cols.get("datetime") or
+                    cols.get("incident_datetime") or cols.get("date_time") or
+                    cols.get("date"))
           if ts_col is None:
-            raise RuntimeError("sf_crime.csv içinde timestamp/datetime sütunu bulunamadı.")
+              raise RuntimeError("sf_crime.csv içinde timestamp/datetime sütunu bulunamadı.")
           t = pd.to_datetime(df_e[ts_col], errors="coerce")
           df_e["date"] = t.dt.strftime("%Y-%m-%d")
           df_e["hour"] = t.dt.hour
-
+      
           # GEOID normalize (sadece rakam, soldan sıfır doldur)
           def norm_geoid(s, L=11):
-              return (s.astype(str)
-                        .str.extract(r"(\d+)", expand=False)
-                        .fillna("")
-                        .str.zfill(L))
+              return (s.astype(str).str.extract(r"(\\d+)", expand=False).fillna("").str.zfill(L))
           gcol_e = cols.get("geoid") or cols.get("geography_id") or "GEOID"
           df_e["GEOID"] = norm_geoid(df_e[gcol_e] if gcol_e in df_e.columns else df_e["GEOID"])
-
-          # 2) Grid: aynı anahtarlar + sadece özellik kolonları
+      
+          # 3) Grid: anahtarlar + sadece özellik kolonları
           df_g = pd.read_csv(GRID_PATH, low_memory=False)
           low_g = {c.lower(): c for c in df_g.columns}
-          # Anahtar kolonlarını garanti et
           for need in ("geoid","date","hour"):
               if need not in low_g:
                   raise RuntimeError(f"Grid dosyasında '{need}' kolonu yok.")
           df_g.rename(columns={low_g["geoid"]:"GEOID", low_g["date"]:"date", low_g["hour"]:"hour"}, inplace=True)
-
-          # Birden fazla satır/çakışma olursa anahtara göre son kaydı tut
           df_g = df_g.sort_index().drop_duplicates(subset=["GEOID","date","hour"], keep="last")
-
-          # Sızma riskli kolonları at (etiket/çıktı/kümülatif hedef benzeri)
+      
           drop_like = re.compile(r"^(y[_]?label|target|label|crime_count|prev_crime_|past_7d_crimes)$", re.I)
           feature_cols = [c for c in df_g.columns if c not in ("GEOID","date","hour") and not drop_like.match(c)]
-          # İstersen burada whitelist de kullanabiliriz.
-
-          # 3) Merge (left) → olay sayısı korunur (~550k)
-          df_m = df_e.merge(df_g[["GEOID","date","hour"]+feature_cols],
-                            on=["GEOID","date","hour"], how="left", copy=False)
-
-          # 4) Kaydet
+      
+          # 4) Merge (left) → olay sayısı korunur
+          df_m = df_e.merge(
+              df_g[["GEOID","date","hour"] + feature_cols],
+              on=["GEOID","date","hour"],
+              how="left",
+              copy=False
+          )
+      
+          # 5) Kaydet (CSV + opsiyonel Parquet + _y snapshot)
           df_m.to_csv(OUT_PATH, index=False)
           print("✅ Merge tamam:", OUT_PATH, "| rows:", len(df_m), "| cols:", len(df_m.columns))
-
-          # 5) Opsiyonel: Parquet + _y snapshot
+      
           try:
-              import pyarrow  # noqa
-              df_m.to_parquet(os.path.splitext(OUT_PATH)[0]+".parquet", index=False)
+              import pyarrow  # noqa: F401
+              Path(OUT_PATH).with_suffix(".parquet").unlink(missing_ok=True)
+              df_m.to_parquet(Path(OUT_PATH).with_suffix(".parquet"), index=False)
           except Exception as e:
               print("⚠️ Parquet yazılamadı:", e)
-          import shutil
-          shutil.copyfile(OUT_PATH, os.path.splitext(OUT_PATH)[0]+"_y.csv")
+      
+          y_path = Path(OUT_PATH).with_name(Path(OUT_PATH).stem + "_y.csv")
+          y_path.write_bytes(Path(OUT_PATH).read_bytes())
           PY
 
       - name: 12) Install ML deps for stacking
