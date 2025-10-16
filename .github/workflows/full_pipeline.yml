@@ -483,6 +483,7 @@ jobs:
           from pathlib import Path
           # DİKKAT: 08_static için doğru fonksiyon
           from scripts.common import clean_and_save_crime_08
+          clean_and_save_crime_08()
       
           CRIME_DIR = os.getenv("CRIME_DATA_DIR","crime_prediction_data")
           candidates = [
