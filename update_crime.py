@@ -455,7 +455,7 @@ if raw_new is not None and not raw_new.empty:
     # UTC→SF
     df_new["datetime"] = pd.to_datetime(df_new["incident_datetime"], utc=True, errors="coerce").dt.tz_convert(SF_TZ)
     # yerel tarih/saat
-    df_new["date"] = df_new["datetime"].dt.date
+    df_new["date"] = df_new["datetime"].dt.normalize()
     df_new["time"] = df_new["datetime"].dt.strftime("%H:%M:%S")
     df_new["event_hour"] = df_new["datetime"].dt.hour
     # id
@@ -507,7 +507,7 @@ if "time" not in df_old.columns:
     df_old["time"] = "00:00:00"
 _before_merge = df_old.shape
 if "date" in df_old.columns:
-    df_old["date"] = pd.to_datetime(df_old["date"], errors="coerce").dt.date
+    df_old["date"] = pd.to_datetime(df_old["date"], errors="coerce").dt.normalize()
 
 if FORCE_FULL and (raw_new is not None) and (not raw_new.empty):
     df_all = df_new.copy()
@@ -520,16 +520,16 @@ if "GEOID" in df_all.columns:
     df_all["GEOID"] = df_all["GEOID"].astype(str).str.extract(r"(\d+)")[0].str[:DEFAULT_GEOID_LEN]
 
 # 5y pencere + datetime
-start_date_5y = today - timedelta(days=5*365)
+start_date_5y = pd.Timestamp(today - timedelta(days=5*365)).normalize()
 
-# 1) 'date' sütununu önce datetime64'e çevir
-df_all["date"] = pd.to_datetime(df_all["date"], errors="coerce")
+# 1) 'date' garanti olsun
+df_all["date"] = pd.to_datetime(df_all["date"], errors="coerce").dt.normalize()
 
 # 2) Geçersiz tarihleri at
 df_all = df_all.dropna(subset=["date"])
 
-# 3) 5 yıllık pencereyi güvenle uygula (datetime.date ile karşılaştır)
-df_all = df_all[df_all["date"].dt.date >= start_date_5y]
+# 3) Karşılaştırmayı datetime64 vs Timestamp yap
+df_all = df_all[df_all["date"] >= start_date_5y]
 
 # 4) Saat sütunu ve datetime birleştirme
 df_all["time"] = df_all["time"].astype(str).fillna("00:00:00")
