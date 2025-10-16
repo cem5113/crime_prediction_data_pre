@@ -459,79 +459,7 @@ jobs:
           elif [ -f scripts/enrich_police_gov_06_to_07.py ]; then python -u scripts/enrich_police_gov_06_to_07.py;
           else echo "Polis/Gov adımı bulunamadı"; exit 2; fi
 
-      - name: 09) Hava durumu → sf_crime_08.csv
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        run: |
-          set -e
-          if [ -f update_weather.py ]; then
-            python -u update_weather.py
-          elif [ -f scripts/update_weather.py ]; then
-            python -u scripts/update_weather.py
-          else
-            echo "❌ Weather script not found"; exit 2
-          fi
-          echo "sf_crime_08.csv — ilk 5 satır:"
-          head -n 5 "${CRIME_DATA_DIR}/sf_crime_08.csv" || head -n 5 sf_crime_08.csv || true
-
-      # 09.9) sf_crime_08.csv dosyasını CRIME_DATA_DIR altına yerleştir
-      - name: Normalize sf_crime_08 into CRIME_DATA_DIR
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        run: |
-          set -euo pipefail
-          DEST="${CRIME_DATA_DIR}/sf_crime_08.csv"
-          mkdir -p "${CRIME_DATA_DIR}"
-          FOUND=""
-
-          for p in \
-            "crime_prediction_data/sf_crime_08.csv" \
-            "crime_data/sf_crime_08.csv" \
-            "sf_crime_08.csv" \
-            "outputs/sf_crime_08.csv"
-          do
-            if [ -f "$p" ]; then
-              if [ -e "$DEST" ] && [ "$p" -ef "$DEST" ]; then
-                echo "ℹ️ Zaten hedefte: $DEST"
-              else
-                cp -f "$p" "$DEST"
-                echo "✅ Copied: $p → $DEST"
-              fi
-              FOUND="yes"
-              break
-            fi
-          done
-
-          if [ -z "$FOUND" ]; then
-            echo "❌ sf_crime_08.csv not found in known locations"
-            exit 2
-          fi
-          echo "---- sf_crime_08.csv (head) ----"
-          head -n 5 "$DEST" || true
-
-      - name: Normalize grid outputs (put under CRIME_DATA_DIR)
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        run: |
-          set -e
-          mkdir -p "${CRIME_DATA_DIR}"
-          CANDIDATES=(
-            "sf_crime_grid_full_labeled.csv"
-            "data/sf_crime_grid_full_labeled.csv"
-            "outputs/sf_crime_grid_full_labeled.csv"
-            "${CRIME_DATA_DIR}/sf_crime_grid_full_labeled.csv"
-          )
-          FOUND=""
-          for p in "${CANDIDATES[@]}"; do
-            if [ -f "$p" ]; then
-              cp -f "$p" "${CRIME_DATA_DIR}/sf_crime_grid_full_labeled.csv"
-              echo "✅ Grid kopyalandı: $p → ${CRIME_DATA_DIR}/sf_crime_grid_full_labeled.csv"
-              FOUND="yes"
-              break
-            fi
-          done
-          if [ -z "$FOUND" ]; then
-            echo "⚠️ sf_crime_grid_full_labeled.csv bulunamadı; stacking bazı görünümleri atlayabilir."
-          fi
-
-      - name: 10) sf_crime_09 üretimi (common.py)
+      - name: 10) sf_crime_08 üretimi (common.py)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         run: |
           set -e
@@ -543,24 +471,24 @@ jobs:
 
           CRIME_DIR = os.getenv("CRIME_DATA_DIR","crime_prediction_data")
           candidates = [
-              Path(CRIME_DIR) / "sf_crime_08.csv",
-              Path("crime_prediction_data") / "sf_crime_08.csv",
-              Path("crime_data") / "sf_crime_08.csv",
-              Path("sf_crime_08.csv"),
-              Path("outputs") / "sf_crime_08.csv",
+              Path(CRIME_DIR) / "sf_crime_07.csv",
+              Path("crime_prediction_data") / "sf_crime_07.csv",
+              Path("crime_data") / "sf_crime_07.csv",
+              Path("sf_crime_07.csv"),
+              Path("outputs") / "sf_crime_07.csv",
           ]
           src_path = next((p for p in candidates if p.exists()), None)
           if src_path is None:
-              raise FileNotFoundError("sf_crime_08.csv not found in known locations")
+              raise FileNotFoundError("sf_crime_07.csv not found in known locations")
           src = str(src_path)
-          dst = str(Path(CRIME_DIR)/"sf_crime_09.csv")
+          dst = str(Path(CRIME_DIR)/"sf_crime_08.csv")
 
-          clean_and_save_crime_09(src, dst)
-          print("✅ sf_crime_09 hazır →", dst)
+          clean_and_save_crime_08(src, dst)
+          print("✅ sf_crime_08 hazır →", dst)
           try:
               df = pd.read_csv(dst, low_memory=False)
               with pd.option_context("display.max_columns", None, "display.width", 2000):
-                  print("📄 sf_crime_09.csv — ilk 5 satır:")
+                  print("📄 sf_crime_08.csv — ilk 5 satır:")
                   print(df.head(5).to_string(index=False))
           except Exception as e:
               print(f"⚠️ Önizleme okunamadı: {e}")
@@ -659,6 +587,192 @@ jobs:
               echo "🔧 Komşuluk yeniden oluşturuluyor (${NEIGHBOR_STRATEGY}, min_deg=${MIN_NEIGHBOR_DEG}, knn_k=${KNN_K})"
 
               cat > _rebuild_neighbors.py <<'PY'
+
+      - name: Normalize grid outputs (put under CRIME_DATA_DIR)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          set -e
+          mkdir -p "${CRIME_DATA_DIR}"
+          CANDIDATES=(
+            "sf_crime_grid_full_labeled.csv"
+            "data/sf_crime_grid_full_labeled.csv"
+            "outputs/sf_crime_grid_full_labeled.csv"
+            "${CRIME_DATA_DIR}/sf_crime_grid_full_labeled.csv"
+          )
+          FOUND=""
+          for p in "${CANDIDATES[@]}"; do
+            if [ -f "$p" ]; then
+              cp -f "$p" "${CRIME_DATA_DIR}/sf_crime_grid_full_labeled.csv"
+              echo "✅ Grid kopyalandı: $p → ${CRIME_DATA_DIR}/sf_crime_grid_full_labeled.csv"
+              FOUND="yes"
+              break
+            fi
+          done
+          if [ -z "$FOUND" ]; then
+            echo "⚠️ sf_crime_grid_full_labeled.csv bulunamadı; stacking bazı görünümleri atlayabilir."
+          fi
+
+      - name: Normalize sf_crime_08 into CRIME_DATA_DIR
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          set -euo pipefail
+          DEST="${CRIME_DATA_DIR}/sf_crime_08.csv"
+          mkdir -p "${CRIME_DATA_DIR}"
+          FOUND=""
+
+          for p in \
+            "crime_prediction_data/sf_crime_08.csv" \
+            "crime_data/sf_crime_08.csv" \
+            "sf_crime_08.csv" \
+            "outputs/sf_crime_08.csv"
+          do
+            if [ -f "$p" ]; then
+              if [ -e "$DEST" ] && [ "$p" -ef "$DEST" ]; then
+                echo "ℹ️ Zaten hedefte: $DEST"
+              else
+                cp -f "$p" "$DEST"
+                echo "✅ Copied: $p → $DEST"
+              fi
+              FOUND="yes"
+              break
+            fi
+          done
+
+          if [ -z "$FOUND" ]; then
+            echo "❌ sf_crime_08.csv not found in known locations"
+            exit 2
+          fi
+          echo "---- sf_crime_08.csv (head) ----"
+          head -n 5 "$DEST" || true
+
+      - name: 9.10) Prepare NEW sf_crime_08 statics from OLD sf_crime_09 (drop weather)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          python - <<'PY'
+          import os, pandas as pd, pathlib
+          CRIME_DIR = os.environ.get("CRIME_DATA_DIR","crime_prediction_data")
+          old09 = pathlib.Path(CRIME_DIR)/"sf_crime_09.csv"      # varsa kullan
+          out08 = pathlib.Path(CRIME_DIR)/"sf_crime_08_static.csv"
+
+          if not old09.exists():
+              print("ℹ️ sf_crime_09.csv yok; yeni 08 statikleri eski 09'dan üretilemeyecek. Bu adım opsiyonel.")
+              raise SystemExit(0)
+
+          df = pd.read_csv(old09, low_memory=False)
+          # Olası weather kolonları
+          drop_names = {
+            "temp","tempmax","temp_min","tempmin","temp_max","temp_range",
+            "precip","precipitation","precipitation_mm","humidity","windspeed","icon","description"
+          }
+          drop_cols = [c for c in df.columns if c.lower() in drop_names]
+          if drop_cols:
+              df.drop(columns=drop_cols, inplace=True, errors="ignore")
+              print("🧹 Weather benzeri kolonlar silindi:", drop_cols)
+
+          df.to_csv(out08, index=False)
+          print(f"✅ NEW sf_crime_08 statics hazır → {out08}")
+          PY
+
+      - name: 9.11) Build NEW sf_crime_09 from sf_crime_y + weather(date) + NEW 08 statics(GEOID)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          python - <<'PY'
+          import os, pandas as pd, numpy as np
+          from pathlib import Path
+
+          CRIME_DIR = os.environ.get("CRIME_DATA_DIR","crime_prediction_data")
+
+          def _read(p, **kw):
+              p = Path(p)
+              if not p.exists(): return None
+              try: return pd.read_csv(p, **kw)
+              except Exception: return None
+
+          def _norm_geoid(s, L=11):
+              return s.astype(str).str.extract(r"(\d+)", expand=False).str[:L].str.zfill(L)
+
+          # 1) Base: sf_crime_y (satır/sütun sabit kalacak; sadece eklenecek)
+          Y = _read(Path(CRIME_DIR)/"sf_crime_y.csv", dtype={"GEOID":str})
+          assert Y is not None and not Y.empty, "sf_crime_y.csv yok/boş!"
+          base_cols = list(Y.columns); n0 = len(Y)
+
+          # date
+          if "date" in Y.columns:
+              Y["date"] = pd.to_datetime(Y["date"], errors="coerce").dt.date
+          elif "datetime" in Y.columns:
+              Y["date"] = pd.to_datetime(Y["datetime"], errors="coerce").dt.date
+          else:
+              raise ValueError("sf_crime_y içinde date/datetime yok (weather join için gerekli).")
+
+          if "GEOID" in Y.columns:
+              Y["GEOID"] = _norm_geoid(Y["GEOID"])
+
+          # 2) WEATHER: öncelik sf_crime_08.csv (weather adımı), yoksa sf_weather_5years.csv fallback
+          W = _read(Path(CRIME_DIR)/"sf_crime_08.csv")
+          if W is not None and not W.empty and "date" in W.columns:
+              W["date"] = pd.to_datetime(W["date"], errors="coerce").dt.date
+              # muhtemel kolonlar
+              weather_keep = [c for c in ["date","tempmax","temp_max","tempmin","temp_min","temp_range","precip","precipitation_mm","humidity","windspeed","icon","description"] if c in W.columns]
+              W = W[weather_keep].drop_duplicates(subset=["date"], keep="last")
+              before = set(Y.columns)
+              Y = Y.merge(W, on="date", how="left")
+              print("➕ weather (sf_crime_08.csv) eklendi:", [c for c in Y.columns if c not in before])
+          else:
+              W2 = _read(Path(CRIME_DIR)/"sf_weather_5years.csv")
+              if W2 is not None and not W2.empty and "date" in W2.columns:
+                  W2["date"] = pd.to_datetime(W2["date"], errors="coerce").dt.date
+                  weather_keep = [c for c in ["date","tempmax","temp_max","tempmin","temp_min","temp_range","precip","precipitation_mm","humidity","windspeed","icon","description"] if c in W2.columns]
+                  W2 = W2[weather_keep].drop_duplicates(subset=["date"], keep="last")
+                  before = set(Y.columns)
+                  Y = Y.merge(W2, on="date", how="left")
+                  print("➕ weather (sf_weather_5years.csv) eklendi:", [c for c in Y.columns if c not in before])
+              else:
+                  print("ℹ️ weather bulunamadı (08 de 5years da).")
+
+          # 3) STATICS: NEW sf_crime_08 statikleri (eski 09'dan türetilmiş) + diğer GEOID tabanlı kaynaklar
+          stat_sources = [
+              ("sf_crime_08_static.csv", ["GEOID"]),  # tüm GEOID’li alanları serbest bırakacağız
+              ("sf_population.csv", ["GEOID","population","population_density"]),
+              ("sf_bus_stops_with_geoid.csv", ["GEOID","bus_stop_count","distance_to_bus","bus_stop_count_range","distance_to_bus_range"]),
+              ("sf_train_stops_with_geoid.csv", ["GEOID","train_stop_count","distance_to_train","train_stop_count_range","distance_to_train_range"]),
+              ("sf_pois_cleaned_with_geoid.csv", ["GEOID","poi_total_count","poi_risk_score","poi_dominant_type","poi_total_count_range","poi_risk_score_range"]),
+              ("sf_police_gov_crime.csv", ["GEOID","distance_to_police","distance_to_police_range","distance_to_government_building","distance_to_government_building_range","is_near_police","is_near_government"]),
+          ]
+          for fname, whitelist in stat_sources:
+              T = _read(Path(CRIME_DIR)/fname)
+              if T is None or T.empty:
+                  print(f"ℹ️ {fname} yok/boş; atlandı."); continue
+              if "GEOID" not in T.columns:
+                  print(f"⚠️ {fname} içinde GEOID yok; atlandı."); continue
+
+              T["GEOID"] = _norm_geoid(T["GEOID"])
+              if fname == "sf_crime_08_static.csv":
+                  # Eski 09’dan gelen yeni 08 statikleri → tüm GEOID’li kolonlar (weather zaten 2. adımda eklendi)
+                  keep_cols = [c for c in T.columns if c == "GEOID" or c not in {"date","datetime"}]
+              else:
+                  keep_cols = [c for c in whitelist if c in T.columns]
+
+              T = T[keep_cols].drop_duplicates(subset=["GEOID"], keep="last")
+              before = set(Y.columns)
+              Y = Y.merge(T, on="GEOID", how="left")
+              added = [c for c in Y.columns if c not in before]
+              if added:
+                  print(f"➕ eklendi ({fname}):", added)
+
+          # 4) Kolon sırası: sf_crime_y sabit + yeni ekler
+          new_cols = [c for c in Y.columns if c not in base_cols]
+          Y = Y[base_cols + new_cols]
+          assert len(Y) == n0, f"Satır sayısı değişti! {n0}→{len(Y)}"
+
+          OUT = Path(CRIME_DIR)/"sf_crime_09.csv"
+          Y.to_csv(OUT, index=False)
+          print(f"✅ NEW sf_crime_09 yazıldı: {OUT} | rows={len(Y)}, cols={Y.shape[1]}")
+          try:
+              print("📄 NEW sf_crime_09 (head):")
+              print(Y.head(5).to_string(index=False))
+          except Exception: pass
+          PY
+              
           #!/usr/bin/env python3
           from __future__ import annotations
           import os, re
