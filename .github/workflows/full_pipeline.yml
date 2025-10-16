@@ -744,6 +744,8 @@ if __name__ == "__main__":
     main()
 PY
               python _rebuild_neighbors.py
+              rm -f _rebuild_neighbors.py
+              rm -f "${CRIME_DATA_DIR}/.rebuild_neighbors"
             fi
           fi
 
