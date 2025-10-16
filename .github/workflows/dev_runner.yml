@@ -124,7 +124,7 @@ jobs:
           LABEL_STYLE: ${{ env.LABEL_STYLE }}
           STACKING_DATASET: ${{ env.STACKING_DATASET }}
           MODEL_DIR:   ${{ env.MODEL_DIR }}
-          FORECAST_OUT:${{ env.FORECAST_OUT }}
+          FORECAST_OUT: ${{ env.FORECAST_OUT }}
           HORIZONS:    ${{ env.HORIZONS }}
         run: |
           set -uo pipefail
