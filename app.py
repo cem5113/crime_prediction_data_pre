@@ -1086,16 +1086,16 @@ else:
 st.markdown("### 1.6) CSV → Parquet dönüştür")
 with st.expander("🔄 CSV’leri Parquet’e çevir (zstd)"):
     in_dir = st.text_input(
-        "Girdi klasörü", value=str(DATA_DIR), help="Örn: crime_prediction_data_pre/"
+        "Girdi klasörü", value=str(DATA_DIR), help="Örn: crime_prediction_data/", key="in_dir"
     )
     out_dir = st.text_input(
-        "Çıktı klasörü", value=str(ROOT / "parquet_out"), help="Örn: parquet_out/"
+        "Çıktı klasörü", value=str(ROOT / "parquet_out"), help="Örn: parquet_out/", key="out_dir"
     )
-    patt_in = st.text_input("Desen (glob)", "*.csv", help="Örn: sf_crime_*.csv")
-    comp = st.selectbox("Sıkıştırma", ["zstd", "snappy", "gzip", "brotli", "uncompressed"], index=0)
-    want_stats = st.checkbox("Özet/stats üret", value=True)
+    patt_in = st.text_input("Desen (glob)", "*.csv", help="Örn: sf_crime_*.csv", key="glob_convert")
+    comp = st.selectbox("Sıkıştırma", ["zstd", "snappy", "gzip", "brotli", "uncompressed"], index=0, key="comp_select")
+    want_stats = st.checkbox("Özet/stats üret", value=True, key="want_stats")
 
-    if st.button("🧰 Dönüştür (CSV → Parquet)"):
+    if st.button("🧰 Dönüştür (CSV → Parquet)", key="convert_btn"):
         try:
             res = convert_csv_dir_to_parquet(
                 input_dir=Path(in_dir),
