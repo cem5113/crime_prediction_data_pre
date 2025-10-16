@@ -551,31 +551,46 @@ def clean_and_save_crime_09(input_obj="sf_crime_08.csv", output_path="sf_crime_0
             os.environ.get("NEIGHBOR_FILE", str(Path(DATA_DIR) / "neighbors.csv"))
         )
         if neighbors_path.exists() and {"date","GEOID"}.issubset(df.columns):
-            nbr = pd.read_csv(neighbors_path, dtype={"GEOID":str,"NEIGHBOR_GEOID":str})
+            # neighbors.csv'yi esnek başlık eşlemesi ile oku
+            nbr = pd.read_csv(neighbors_path, dtype=str, low_memory=False)
+            low = {re.sub(r"[^a-z0-9]", "", c.lower()): c for c in nbr.columns}
+            # kaynak sütunlar: repo/workflow 'geoid,neighbor' üretiyor
+            src = low.get("geoid") or low.get("source") or low.get("src")
+            dst = (low.get("neighbor") or low.get("neighborgeoid") or low.get("neighbor_geoid")
+                   or low.get("target") or low.get("dst"))
+            if not src or not dst:
+                raise ValueError(f"neighbors.csv başlıkları tanınamadı: {nbr.columns.tolist()}")
+    
+            # Standart isimlere dönüştür
+            nbr = nbr.rename(columns={src: "GEOID", dst: "NEIGHBOR_GEOID"})[["GEOID","NEIGHBOR_GEOID"]]
+    
+            # GEOID uzunluk/padding normalize
             L = int(os.environ.get("GEOID_LEN","11"))
             for colx in ["GEOID","NEIGHBOR_GEOID"]:
                 nbr[colx] = nbr[colx].astype(str).str.extract(r"(\d+)", expand=False).str.zfill(L)
-
+    
+            # Günlük toplam seri
             daily = (df[["date","GEOID","crime_count"]].copy())
             daily["date"] = pd.to_datetime(daily["date"], errors="coerce").dt.date
             daily = (daily.groupby(["GEOID","date"], as_index=False)["crime_count"].sum())
             daily["date"] = pd.to_datetime(daily["date"])
-            # komşulukla genişlet
+    
+            # Komşulukla genişlet → 7 günlük pencere + 1 gün lag
             d2 = nbr.merge(daily.rename(columns={"GEOID":"NEIGHBOR_GEOID"}), on="NEIGHBOR_GEOID", how="left")
-            # komşu günlük seri → 7 günlük pencere + 1 gün lag
             d2 = d2.sort_values(["GEOID","date"])
+    
             def _agg_nei(x):
                 x = x.set_index("date").asfreq("D", fill_value=0)
                 x["nei_7d_sum"] = x["crime_count"].rolling("7D").sum().shift(1)
                 return x.reset_index()
-
+    
             d3 = (d2.groupby("GEOID")
                     .apply(_agg_nei)
                     .reset_index(level=0)
                     .reset_index(drop=True))
             d3["date"] = d3["date"].dt.date
             d3 = d3.groupby(["GEOID","date"], as_index=False)["nei_7d_sum"].sum()
-
+    
             df = df.merge(d3, on=["GEOID","date"], how="left")
             df["nei_7d_sum"] = pd.to_numeric(df["nei_7d_sum"], errors="coerce").fillna(0).astype(float)
     except Exception as _e:
