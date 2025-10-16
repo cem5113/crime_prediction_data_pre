@@ -48,9 +48,9 @@ env:
   LABEL_STYLE: "legacy01"          # Y_label 0/1 eski usul
 
   # stacking & forecast için varsayılan yollar
-  STACKING_DATASET: ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.parquet
-  MODEL_DIR:        ${{ env.CRIME_DATA_DIR }}/models_cat
-  FORECAST_OUT:     ${{ env.CRIME_DATA_DIR }}/sf_forecast_cat
+  STACKING_DATASET: crime_prediction_data/sf_crime_grid_full_labeled.parquet
+  MODEL_DIR: crime_prediction_data/models_cat
+  FORECAST_OUT: crime_prediction_data/sf_forecast_cat
   HORIZONS: "24h,7d,30d,90d,365d"
 
 jobs:
