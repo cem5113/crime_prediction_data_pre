@@ -32,15 +32,20 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: manual-step-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CRIME_DATA_DIR: crime_prediction_data
   GEOID_LEN: "11"
-  SOCS_APP_TOKEN: ${{ secrets.SOCS_APP_TOKEN }}
   PYTHONUNBUFFERED: "1"
+  SOCS_APP_TOKEN: ${{ secrets.SOCS_APP_TOKEN }}
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout (with LFS)
         uses: actions/checkout@v4
@@ -56,6 +61,7 @@ jobs:
 
       # ---- En son BAŞARILI full pipeline artifact'ını indir (fallback için) ----
       - name: Restore last-good snapshot (from Full SF Crime Pipeline)
+        id: lastgood
         uses: dawidd6/action-download-artifact@v3
         with:
           workflow: full_pipeline.yml
@@ -86,14 +92,17 @@ jobs:
 
       - name: Install minimal deps
         run: |
+          set -Eeuo pipefail
           python -m pip install -U pip wheel setuptools
-          pip install pandas numpy requests holidays scipy scikit-learn joblib
+          pip install "pandas" "numpy" "requests" "holidays" "scipy" "scikit-learn" "joblib"
           pip install lightgbm xgboost || true
 
-      - name: Install geo stack if needed
+      - name: Install geo stack if needed (pinned)
         if: ${{ contains('full,update_bus,update_train,update_poi,update_police_gov', github.event.inputs.step) }}
         run: |
-          pip install geopandas shapely pyproj pyogrio rtree
+          set -Eeuo pipefail
+          # Ana pipeline ile uyumlu sürümler
+          pip install "geopandas==1.0.1" "shapely==2.0.4" "pyproj==3.6.1" "pyogrio==0.9.0" "rtree==1.3.0"
 
       - name: Sanity check inputs (ön-uyarı)
         run: |
@@ -103,79 +112,151 @@ jobs:
           echo "crime_prediction_data/"
           ls -lah crime_prediction_data || true
 
-      # ---- ÇALIŞTIRMA (Hata → fallback → devam) ----
-      - name: Run selected step (with fallback)
+      - name: Run selected step (with resilient fallback)
         shell: bash
         run: |
-          set -uo pipefail
+          set -Eeuo pipefail
+          trap 'echo "⛔ Hata oluştu (satır: $LINENO). Logları kontrol edin."' ERR
 
-          copy_fallback() {
-            if [ -d last_good/crime_prediction_data ]; then
-              mkdir -p crime_prediction_data
-              cp -f last_good/crime_prediction_data/*.csv crime_prediction_data/ 2>/dev/null || true
-              cp -f last_good/crime_prediction_data/*.geojson crime_prediction_data/ 2>/dev/null || true
-              echo "ℹ️ Fallback: last_good/crime_prediction_data → crime_prediction_data/ kopyalandı."
-            elif [ -d last_good ]; then
-              mkdir -p crime_prediction_data
-              cp -f last_good/*.csv crime_prediction_data/ 2>/dev/null || true
-              cp -f last_good/*.geojson crime_prediction_data/ 2>/dev/null || true
-              echo "ℹ️ Fallback: last_good → crime_prediction_data/ kopyalandı."
+          # ------- yardımcılar -------
+          copy_fallback_partial() {
+            # last_good varsa, eksik/boş olan dosyaları tamamlama
+            if [ -d last_good ]; then
+              mkdir -p "${CRIME_DATA_DIR}"
+              for f in $(find last_good -maxdepth 1 -type f -name "*.csv" -o -name "*.geojson" 2>/dev/null); do
+                base="$(basename "$f")"
+                dest="${CRIME_DATA_DIR}/${base}"
+                if [ ! -s "${dest}" ]; then
+                  cp -f "$f" "${dest}" && echo "↪️ Fallback kopyalandı: ${base}"
+                fi
+              done
+              if [ -d last_good/crime_prediction_data ]; then
+                for f in $(find last_good/crime_prediction_data -maxdepth 1 -type f -name "*.csv" -o -name "*.geojson" 2>/dev/null); do
+                  base="$(basename "$f")"
+                  dest="${CRIME_DATA_DIR}/${base}"
+                  if [ ! -s "${dest}" ]; then
+                    cp -f "$f" "${dest}" && echo "↪️ Fallback kopyalandı: ${base}"
+                  fi
+                done
+              fi
             else
-              echo "❌ Fallback mümkün değil: last_good/ yok."
+              echo "ℹ️ Fallback yok: last_good/ bulunamadı."
             fi
+          }
+
+          ensure_script() {
+            # var ise onu kullan; yoksa alternatiflerinden birini scripts/ altına aynen kopyala
+            local main="$1"; shift
+            local alts=("$@")
+            if [ -f "$main" ]; then
+              echo "$main"
+              return 0
+            fi
+            for a in "${alts[@]}"; do
+              if [ -f "$a" ]; then
+                mkdir -p scripts
+                cp -f "$a" "scripts/${main}"
+                echo "🔁 ${a} → scripts/${main} olarak kopyalandı."
+                echo "scripts/${main}"
+                return 0
+              fi
+            done
+            echo ""
+            return 1
           }
 
           run_or_fallback() {
             local label="$1"
-            shift
+            local cmd="$2"
             echo "▶️ ${label} başlıyor…"
-            if bash -lc "$*"; then
+            if bash -lc "$cmd"; then
               echo "✅ ${label} tamam."
+              return 0
             else
-              echo "⚠️ ${label} FAILED. Falling back to last_good/ and continuing…"
-              copy_fallback
+              echo "⚠️ ${label} FAILED. Fallback dosyaları kopyalanıyor ve devam ediliyor…"
+              copy_fallback_partial
+              return 1
             fi
           }
 
           run_full() {
-            run_or_fallback "01 update_crime"        "python -u update_crime.py"
-            run_or_fallback "02 update_911"          "python -u update_911.py"
-            run_or_fallback "03 update_311"          "if [ -f update_311.py ]; then python -u update_311.py; else python -u scripts/update_311.py; fi"
-            run_or_fallback "04 update_population"   "python -u update_population.py"
-            run_or_fallback "05 update_bus"          "python -u update_bus.py"
-            run_or_fallback "06 update_train"        "python -u update_train.py"
-            run_or_fallback "07 update_poi"          "if [ -f update_poi.py ]; then python -u update_poi.py; elif [ -f pipeline_make_sf_crime_06.py ]; then python -u pipeline_make_sf_crime_06.py; else echo 'POI adımı yok'; exit 2; fi"
-            run_or_fallback "08 update_police_gov"   "if [ -f update_police_gov.py ]; then python -u update_police_gov.py; elif [ -f scripts/enrich_police_gov_06_to_07.py ]; then python -u scripts/enrich_police_gov_06_to_07.py; else echo 'Polis/Gov adımı yok'; exit 2; fi"
-            run_or_fallback "09 update_weather"      "if [ -f update_weather.py ]; then python -u update_weather.py; else python -u scripts/update_weather.py; fi"
+            run_or_fallback "01 update_crime"      "$( \
+              p=$(ensure_script 'update_crime.py' 'build_crime_grid.py' 'crime_grid_build.py'); \
+              test -n "$p" && echo "python -u $p" || echo "python -u update_crime.py" )" || true
+
+            run_or_fallback "02 update_911"        "python -u $(ensure_script 'update_911.py' 'enrich_911.py' || echo 'update_911.py')" || true
+
+            run_or_fallback "03 update_311"        "$( \
+              p=$(ensure_script 'update_311.py' 'scripts/update_311.py' 'enrich_311.py'); \
+              test -n "$p" && echo "python -u $p" || echo "python -u update_311.py" )" || true
+
+            run_or_fallback "04 update_population" "python -u $(ensure_script 'update_population.py' 'enrich_population.py' || echo 'update_population.py')" || true
+
+            run_or_fallback "05 update_bus"        "python -u $(ensure_script 'update_bus.py' 'enrich_bus.py' || echo 'update_bus.py')" || true
+
+            run_or_fallback "06 update_train"      "python -u $(ensure_script 'update_train.py' 'enrich_train.py' || echo 'update_train.py')" || true
+
+            run_or_fallback "07 update_poi"        "$( \
+              p=$(ensure_script 'update_poi.py' 'pipeline_make_sf_crime_06.py' 'app_poi_to_06.py' 'enrich_poi.py'); \
+              test -n "$p" && echo "python -u $p" || echo "echo 'POI adımı yok'; exit 2" )" || true
+
+            run_or_fallback "08 update_police_gov" "$( \
+              p=$(ensure_script 'update_police_gov.py' 'scripts/enrich_police_gov_06_to_07.py' 'enrich_police_gov.py' 'enrich_police.py'); \
+              test -n "$p" && echo 'python -u '"$p" || echo "echo 'Polis/Gov adımı yok'; exit 2" )" || true
+
+            run_or_fallback "09 update_weather"    "$( \
+              p=$(ensure_script 'update_weather.py' 'scripts/update_weather.py' 'enrich_weather.py'); \
+              test -n "$p" && echo "python -u $p" || echo "python -u update_weather.py" )" || true
           }
 
           STEP="${{ github.event.inputs.step }}"
           case "$STEP" in
             full) run_full ;;
-            update_crime)        run_or_fallback "update_crime"        "python -u update_crime.py" ;;
-            update_911)          run_or_fallback "update_911"          "python -u update_911.py" ;;
-            update_311)          run_or_fallback "update_311"          "if [ -f update_311.py ]; then python -u update_311.py; else python -u scripts/update_311.py; fi" ;;
-            update_population)   run_or_fallback "update_population"   "python -u update_population.py" ;;
-            update_bus)          run_or_fallback "update_bus"          "python -u update_bus.py" ;;
-            update_train)        run_or_fallback "update_train"        "python -u update_train.py" ;;
-            update_poi)          run_or_fallback "update_poi"          "if [ -f update_poi.py ]; then python -u update_poi.py; elif [ -f pipeline_make_sf_crime_06.py ]; then python -u pipeline_make_sf_crime_06.py; else echo 'POI adımı yok'; exit 2; fi" ;;
-            update_police_gov)   run_or_fallback "update_police_gov"   "if [ -f update_police_gov.py ]; then python -u update_police_gov.py; elif [ -f scripts/enrich_police_gov_06_to_07.py ]; then python -u scripts/enrich_police_gov_06_to_07.py; else echo 'Polis/Gov adımı yok'; exit 2; fi" ;;
-            update_weather)      run_or_fallback "update_weather"      "if [ -f update_weather.py ]; then python -u update_weather.py; else python -u scripts/update_weather.py; fi" ;;
+            update_crime)        run_or_fallback "update_crime"      "python -u $(ensure_script 'update_crime.py' 'build_crime_grid.py' 'crime_grid_build.py' || echo 'update_crime.py')" || true ;;
+            update_911)          run_or_fallback "update_911"        "python -u $(ensure_script 'update_911.py' 'enrich_911.py' || echo 'update_911.py')" || true ;;
+            update_311)          run_or_fallback "update_311"        "python -u $(ensure_script 'update_311.py' 'scripts/update_311.py' 'enrich_311.py' || echo 'update_311.py')" || true ;;
+            update_population)   run_or_fallback "update_population" "python -u $(ensure_script 'update_population.py' 'enrich_population.py' || echo 'update_population.py')" || true ;;
+            update_bus)          run_or_fallback "update_bus"        "python -u $(ensure_script 'update_bus.py' 'enrich_bus.py' || echo 'update_bus.py')" || true ;;
+            update_train)        run_or_fallback "update_train"      "python -u $(ensure_script 'update_train.py' 'enrich_train.py' || echo 'update_train.py')" || true ;;
+            update_poi)          run_or_fallback "update_poi"        "$( \
+              p=$(ensure_script 'update_poi.py' 'pipeline_make_sf_crime_06.py' 'app_poi_to_06.py' 'enrich_poi.py'); \
+              test -n "$p" && echo "python -u $p" || echo "echo 'POI adımı yok'; exit 2" )" || true ;;
+            update_police_gov)   run_or_fallback "update_police_gov" "$( \
+              p=$(ensure_script 'update_police_gov.py' 'scripts/enrich_police_gov_06_to_07.py' 'enrich_police_gov.py' 'enrich_police.py'); \
+              test -n "$p" && echo "python -u $p" || echo "echo 'Polis/Gov adımı yok'; exit 2" )" || true ;;
+            update_weather)      run_or_fallback "update_weather"    "python -u $(ensure_script 'update_weather.py' 'scripts/update_weather.py' 'enrich_weather.py' || echo 'update_weather.py')" || true ;;
             *) echo "Bilinmeyen step: $STEP"; exit 2 ;;
           esac
 
       - name: Quick preview (ilk satırlar)
         run: |
           echo "sf_crime_08.csv (varsa) – ilk 5 satır"
-          head -n 5 crime_prediction_data/sf_crime_08.csv || true
+          head -n 5 "${CRIME_DATA_DIR}/sf_crime_08.csv" || true
+          echo "sf_crime_07.csv (varsa) – ilk 5 satır"
+          head -n 5 "${CRIME_DATA_DIR}/sf_crime_07.csv" || true
 
       - name: Pack outputs
         run: |
+          set -Eeuo pipefail
           mkdir -p out
-          cp -f crime_prediction_data/*.csv out/ 2>/dev/null || true
-          cp -f *.csv out/ 2>/dev/null || true
-          cp -f crime_prediction_data/*.geojson out/ 2>/dev/null || true
+          cp -f ${CRIME_DATA_DIR}/*.csv out/ 2>/dev/null || true
+          cp -f ${CRIME_DATA_DIR}/*.geojson out/ 2>/dev/null || true
+          # Çalışma kökündeki CSV’ler de eklensin (bazı scriptler oraya yazıyor olabilir)
+          cp -f ./*.csv out/ 2>/dev/null || true
           ls -lah out || true
+
+      - name: Write run summary
+        if: always()
+        run: |
+          {
+            echo "## Manual Step Runner (with fallback)"
+            echo ""
+            echo "- Step: **${{ github.event.inputs.step }}**"
+            echo "- Python: **${{ github.event.inputs.py }}**"
+            echo "- Tarih/Saat: **$(date)**"
+            echo "- CRIME_DATA_DIR içeriği (ilk 10):"
+            ls -lah "${CRIME_DATA_DIR}" | head -n 20 || true
+          } >> $GITHUB_STEP_SUMMARY
 
       - name: Upload artifact (default)
         if: ${{ github.event.inputs.persist == 'artifact' }}
@@ -189,6 +270,7 @@ jobs:
       - name: Commit & push (isteğe bağlı)
         if: ${{ github.event.inputs.persist == 'commit' }}
         run: |
+          set -Eeuo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
