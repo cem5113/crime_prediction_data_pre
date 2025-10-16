@@ -1,0 +1,52 @@
+stop_id,stop_code,stop_name,stop_desc,stop_lat,stop_lon,zone_id,plc_url,location_type,parent_station,index_right,GEOID
+EMBR,,Embarcadero,,37.792789,-122.39708,EMBR,,0,place_EMBR,284.0,060750117002
+MONT,,Montgomery Street,,37.789213,-122.401642,MONT,,0,place_MONT,346.0,060750117004
+POWL,,Powell Street,,37.784645,-122.407387,POWL,,0,place_POWL,345.0,060750176023
+CIVC,,Civic Center / UN Plaza,,37.77945,-122.413879,CIVC,,0,place_CIVC,407.0,060750176042
+16TH,,16th Street / Mission,,37.765176,-122.419755,16TH,,0,place_16TH,418.0,060750201021
+24TH,,24th Street / Mission,,37.752422,-122.418518,24TH,,0,place_24TH,629.0,060750209004
+GLEN,,Glen Park,,37.733269,-122.433557,GLEN,,0,place_GLEN,258.0,060750311001
+BALB,,Balboa Park,,37.721758,-122.44751,BALB,,0,place_BALB,225.0,060750261004
+place_EMBR,,Embarcadero,,37.792762,-122.397037,,https://www.bart.gov/stations/embr,1,,284.0,060750117002
+place_MONT,,Montgomery Street,,37.789173,-122.401587,,https://www.bart.gov/stations/mont,1,,346.0,060750117004
+place_POWL,,Powell Street,,37.784606,-122.407331,,https://www.bart.gov/stations/powl,1,,345.0,060750176023
+place_CIVC,,Civic Center / UN Plaza,,37.779408,-122.413826,,https://www.bart.gov/stations/civc,1,,407.0,060750176042
+place_16TH,,16th Street / Mission,,37.765173,-122.419704,,https://www.bart.gov/stations/16th,1,,418.0,060750201021
+place_24TH,,24th Street / Mission,,37.752419,-122.418468,,https://www.bart.gov/stations/24th,1,,629.0,060750209004
+place_GLEN,,Glen Park,,37.733235,-122.433515,,https://www.bart.gov/stations/glen,1,,258.0,060750311001
+place_BALB,,Balboa Park,,37.721747,-122.447457,,https://www.bart.gov/stations/balb,1,,225.0,060750261004
+16TH_1,,Enter/Exit : 16th Street @ Mission Street (NE),16th Street @ Mission Street (NE),37.765279205,-122.41933807,,,2,place_16TH,418.0,060750201021
+16TH_2,,Enter/Exit : 16th Street @ Mission Street (SW),16th Street @ Mission Street (SW),37.764742121,-122.42004455,,,2,place_16TH,478.0,060750201023
+24TH_1,,Enter/Exit : 24th Street @ Mission Street (NE),24th Street @ Mission Street (NE),37.752479,-122.418098,,,2,place_24TH,576.0,060750209001
+24TH_2,,Enter/Exit : 24th Street @ Mission Street (SW),24th Street @ Mission Street (SW),37.751936,-122.418814,,,2,place_24TH,629.0,060750209004
+BALB_1,,Enter/Exit : Geneva Ave (West),Geneva Ave (South),37.721974,-122.447499,,,2,place_BALB,225.0,060750261004
+BALB_2,,Enter/Exit : Geneva Ave (East),Geneva Ave (North),37.721954,-122.447314,,,2,place_BALB,225.0,060750261004
+CIVC_1,,Enter/Exit : UN Plaza Stairs,UN Plaza Stairs,37.779755,-122.414238,,,2,place_CIVC,336.0,060750124051
+CIVC_2,,Enter/Exit : Market Street (E Middle),Market Street (E Middle),37.779519,-122.413575,,,2,place_CIVC,407.0,060750176042
+CIVC_3,,Enter/Exit : Market Street @ 7th Street (NW),Market Street @ 7th Street (NW),37.780351,-122.412888,,,2,place_CIVC,372.0,060750125041
+CIVC_4,,Enter/Exit : Market Street @ 7th Street (NE),Market Street @ 7th Street (NE),37.780132,-122.412787,,,2,place_CIVC,407.0,060750176042
+CIVC_5,,Enter/Exit : Market Street @ Hyde Street (SW),Market Street @ Hyde Street (SW),37.778953,-122.414656,,,2,place_CIVC,336.0,060750124051
+CIVC_6,,Enter/Exit : Market Street @ 8th Street (SE),Market Street @ 8th Street (SE),37.778811,-122.414464,,,2,place_CIVC,407.0,060750176042
+CIVC_7,,Enter/Exit : Market Street @ Grove Street (SE),Market Street @ Grove Street (SE),37.778689,-122.415076,,,2,place_CIVC,336.0,060750124051
+CIVC_8,,Enter/Exit : Market Street South of 8th Street,Market Street South of 8th Street,37.778396,-122.414934,,,2,place_CIVC,369.0,060750176031
+EMBR_1,,Enter/Exit : Market @ Spear Street (SE),Market @ Spear Street (SE),37.793523,-122.395835,,,2,place_EMBR,379.0,060750615071
+EMBR_2,,Enter/Exit : Market @ Drumm Street (NE),Market @ Drumm Street (NE),37.793669,-122.396016,,,2,place_EMBR,277.0,060750105002
+EMBR_3,,Enter/Exit : Market @ Davis Street (North),Market @ Davis Street (North),37.792886,-122.39701,,,2,place_EMBR,284.0,060750117002
+EMBR_4,,Enter/Exit : Market Street @ Main Street (South),Market Street @ Main Street (South),37.792892,-122.396619,,,2,place_EMBR,379.0,060750615071
+EMBR_5,,Enter/Exit : Market Street @ Front Street (NW),Market Street @ Front Street (NW),37.792198,-122.397884,,,2,place_EMBR,284.0,060750117002
+EMBR_6,,Enter/Exit : Market Street @ Fremont Street (SW),Market Street @ Fremont Street (SW),37.792072,-122.397644,,,2,place_EMBR,484.0,060750615011
+GLEN_1,,Enter/Exit : Station entrance,Station entrance,37.733176,-122.43387,,,2,place_GLEN,258.0,060750311001
+MONT_1,,Enter/Exit : Market @ Post Street (NW),Market @ Post Street (NW),37.788924306,-122.40218957,,,2,place_MONT,346.0,060750117004
+MONT_2,,Enter/Exit : Market (SW),Market (SW),37.788512,-122.402155,,,2,place_MONT,483.0,060750615013
+MONT_3,,Enter/Exit : Market @ Montgomery Street (NE),Market @ Montgomery Street (NE),37.789179,-122.40175,,,2,place_MONT,346.0,060750117004
+MONT_5,,Enter/Exit : Sutter Street,Sutter Street,37.78995,-122.400711,,,2,place_MONT,346.0,060750117004
+MONT_6,,Enter/Exit : Sansome Street,Sansome Street,37.790503,-122.40069,,,2,place_MONT,346.0,060750117004
+MONT_7,,Enter/Exit : Market Street (SE),Market Street (SE),37.789816,-122.400508,,,2,place_MONT,484.0,060750615011
+POWL_1,,Enter/Exit : Market Street @ 4th Street (NE),Market Street @ 4th Street (NE),37.786037872,-122.40566443,,,2,place_POWL,482.0,060750615012
+POWL_2,,Enter/Exit : Market Street @ 4th Street (SE),Market Street @ 4th Street (SE),37.78590866,-122.40552017,,,2,place_POWL,482.0,060750615012
+POWL_3,,Enter/Exit : Stockton Street,Stockton Street,37.785864,-122.406341,,,2,place_POWL,545.0,060750117003
+POWL_4,,Enter/Exit : Market Street @ Ellis Street,Market Street @ Ellis Street,37.785432,-122.406427,,,2,place_POWL,545.0,060750117003
+POWL_5,,Enter/Exit : Market Street @ 4th Street (South),Market Street @ 4th Street (South),37.785256,-122.406301,,,2,place_POWL,345.0,060750176023
+POWL_6,,Enter/Exit : Market Street @ 5th Street (NE),Market Street @ 5th Street (NE),37.78438523,-122.40742314,,,2,place_POWL,345.0,060750176023
+POWL_7,,Enter/Exit : Escalator to Market Street and Cable Cars,Escalator to Market Street and Cable Cars,37.784562,-122.40777,,,2,place_POWL,340.0,060750125031
+POWL_8,,Enter/Exit : Market Street @ 5th Street,Market Street @ 5th Street,37.783715,-122.408259,,,2,place_POWL,371.0,060750176022
