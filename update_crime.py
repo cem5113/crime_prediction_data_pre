@@ -532,14 +532,17 @@ df_all = df_all.dropna(subset=["date"])
 df_all = df_all[df_all["date"] >= start_date_5y]
 
 # 4) Saat sütunu ve datetime birleştirme
-df_all["time"] = df_all["time"].astype(str).fillna("00:00:00")
+df_all["time"] = df_all["time"].fillna("00:00:00").astype(str)
+df_all["time"] = df_all["time"].replace(
+    {"nan": "00:00:00", "NaN": "00:00:00", "None": "00:00:00", "": "00:00:00"}
+).str.strip()
+
 df_all["datetime"] = pd.to_datetime(
     df_all["date"].dt.strftime("%Y-%m-%d") + " " + df_all["time"],
     errors="coerce"
 )
 df_all = df_all.dropna(subset=["datetime"]).copy()
 df_all["datetime"] = df_all["datetime"].dt.floor("h")
-
 
 # TZ sabitle
 try:
@@ -719,7 +722,7 @@ if gdf_blocks is not None:
         if NEIGHBOR_METHOD == "touches":
             left  = tracts.rename(columns={"GEOID":"G1"})
             right = tracts.rename(columns={"GEOID":"G2"})
-            sj = gpd.sjoin(left, right, how="left", predicate="intersects")
+            sj = gpd.sjoin(left, right, how="left", predicate="touches")
             sj = sj[sj["G1"] != sj["G2"]].copy()
             neighbors = sj[["G1","G2"]].drop_duplicates()
         else:
