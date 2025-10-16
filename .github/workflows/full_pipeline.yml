@@ -218,20 +218,25 @@ jobs:
           python - <<'PY'
           import os, pandas as pd
           import pyarrow as pa, pyarrow.parquet as pq
+
           p = os.path.join(os.environ["CRIME_DATA_DIR"], "sf_population.csv")
           q = os.path.join(os.environ["CRIME_DATA_DIR"], "sf_population.parquet")
-          df = pd.read_csv(p)
-          # header normalize
+
+          df = pd.read_csv(p, low_memory=False)
+
+          # Sütun isimlerini normalize et
           low = {c.lower(): c for c in df.columns}
           if 'geoid' not in low and 'geography_id' in low:
               df.rename(columns={low['geography_id']:'GEOID'}, inplace=True)
+
           for cand in ['population','total_population','b01003_001e','estimate','total','value']:
               if cand in low and 'population' not in df.columns:
                   df.rename(columns={low[cand]:'population'}, inplace=True)
                   break
+
           table = pa.Table.from_pandas(df)
           pq.write_table(table, q, compression="zstd")
-          print("population → parquet:", q)
+          print("✅ population → parquet:", q)
           PY
 
       - name: 04) Nüfus → sf_crime_03.parquet (demografi + nüfus)
@@ -241,11 +246,40 @@ jobs:
           CENSUS_GEO_LEVEL: ${{ env.CENSUS_GEO_LEVEL }}
           ACS_YEAR:         ${{ env.ACS_YEAR }}
           DEMOG_WHITELIST:  ${{ env.DEMOG_WHITELIST }}
-          USE_PARQUET:      ${{ env.USE_PARQUET }}
+          USE_PARQUET:      "true"
           ID_BASED:         ${{ env.ID_BASED }}
         run: |
           set -e
-          python -u update_population.py
+          python - <<'PY'
+          import os, pandas as pd
+
+          path = os.environ["POPULATION_PATH"]
+          use_parquet = os.getenv("USE_PARQUET", "false").lower() in ("1", "true", "yes")
+
+          # Güvenli şekilde oku (parquet veya csv)
+          def load_population(p):
+              ext = os.path.splitext(p)[1].lower()
+              if use_parquet or ext == ".parquet":
+                  return pd.read_parquet(p)
+              try:
+                  return pd.read_csv(p, low_memory=False, dtype=str, encoding="utf-8-sig")
+              except UnicodeDecodeError:
+                  return pd.read_csv(p, low_memory=False, dtype=str, encoding="latin1")
+
+          pop = load_population(path)
+
+          # Sütun isimlerini normalize et
+          low = {c.lower(): c for c in pop.columns}
+          if 'geoid' not in low and 'geography_id' in low:
+              pop.rename(columns={low['geography_id']:'GEOID'}, inplace=True)
+          for cand in ['population','total_population','b01003_001e','estimate','total','value']:
+              if cand in low and 'population' not in pop.columns:
+                  pop.rename(columns={low[cand]:'population'}, inplace=True)
+                  break
+
+          print("✅ Nüfus verisi başarıyla yüklendi:", path)
+          print(pop.head())
+          PY
 
       - name: 05) Otobüs → sf_crime_04.parquet
         if: ${{ steps.gate.outputs.proceed == 'true' }}
