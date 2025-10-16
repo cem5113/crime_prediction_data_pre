@@ -73,6 +73,12 @@ jobs:
 
       - name: Ensure data dir
         run: mkdir -p "${CRIME_DATA_DIR}"
+      
+      - name: Back-compat symlink (crime_prediction_data → ${CRIME_DATA_DIR})
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          ln -sfn "${CRIME_DATA_DIR}" crime_prediction_data
+          echo "🔗 Symlink created: crime_prediction_data → ${CRIME_DATA_DIR}"
 
       # --- SF 07:00 kapısı (TZ ayarla + saat kontrolü) ---
       - name: Set runner timezone to America/Los_Angeles
@@ -319,11 +325,22 @@ jobs:
 
       - name: 07) POI zenginleştirme → sf_crime_06.csv
         if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          # POI script’in beklediği giriş/çıkışları açıkça veriyoruz
+          CRIME_DIR:  ${{ env.CRIME_DATA_DIR }}
+          CRIME_IN:   ${{ env.CRIME_DATA_DIR }}/sf_crime_05.csv
+          CRIME_OUT:  ${{ env.CRIME_DATA_DIR }}/sf_crime_06.csv
         run: |
           set -e
-          if [ -f update_poi.py ]; then python -u update_poi.py;
-          elif [ -f pipeline_make_sf_crime_06.py ]; then python -u pipeline_make_sf_crime_06.py;
-          else echo "POI adımı bulunamadı"; exit 2; fi
+          echo "POI input:  ${CRIME_IN}"
+          echo "POI output: ${CRIME_OUT}"
+          if [ -f update_poi.py ]; then
+            python -u update_poi.py
+          elif [ -f pipeline_make_sf_crime_06.py ]; then
+            python -u pipeline_make_sf_crime_06.py
+          else
+            echo "POI adımı bulunamadı"; exit 2
+          fi
 
       - name: 08) Polis & Devlet binaları → sf_crime_07.csv
         if: ${{ steps.gate.outputs.proceed == 'true' }}
