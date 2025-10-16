@@ -261,18 +261,37 @@ def read_existing_crime_csv(p: Path) -> pd.DataFrame | None:
     try:
         compression = "gzip" if p.suffix == ".gz" else None
         df = pd.read_csv(p, dtype={"GEOID": str}, low_memory=False, compression=compression)
+        
+        def _parse_date_col(s: pd.Series) -> pd.Series:
+            # Önce standart dene
+            dt = pd.to_datetime(s, errors="coerce", utc=False)
+            # Eğer tamamen NaT geldiyse ve orijinal numerikse → Excel seri tarihi deneyelim
+            if dt.isna().all() and pd.api.types.is_numeric_dtype(s):
+                # Excel origin
+                dt = pd.to_datetime(s, unit="D", origin="1899-12-30", errors="coerce")
+            return dt  # datetime64[ns]
+        
         if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+            dt = _parse_date_col(df["date"])
         elif "datetime" in df.columns:
-            df["date"] = pd.to_datetime(df["datetime"], errors="coerce").dt.date
+            dt = _parse_date_col(df["datetime"])
         else:
             raise ValueError("CSV içinde 'date' veya 'datetime' sütunu yok.")
+        
+        # Geçersizleri at ve datetime64 olarak sakla (⚠️ .dt.date kullanmıyoruz)
+        df = df.loc[dt.notna()].copy()
+        df["date"] = dt.dt.normalize()  # sadece tarih kısmı ama dtype datetime64[ns]
+        
         if "id" in df.columns:
             df["id"] = df["id"].astype(str)
         if "GEOID" in df.columns:
             df["GEOID"] = df["GEOID"].astype(str)
-        print(f"\U0001F4C2 Mevcut veri yüklendi: {len(df)} satır (son tarih: {df['date'].max()})")
+        
+        last_date = df["date"].max()
+        last_date_str = last_date.date().isoformat() if pd.notna(last_date) else "NaN"
+        print(f"📂 Mevcut veri yüklendi: {len(df)} satır (son tarih: {last_date_str})")
         return df
+
     except Exception as e:
         print(f"\u26A0\ufe0f Mevcut sf_crime okunamadı: {e}")
         return None
