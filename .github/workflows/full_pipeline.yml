@@ -289,16 +289,26 @@ jobs:
           cat > pick_input.sh <<'BASH'
           #!/usr/bin/env bash
           # usage: pick_input OUT_ENV_NAME CAND1 [CAND2 ...]
+          # Argüman yoksa (ör. yanlışlıkla source edilirse) sessizce çık:
+          if [ "$#" -lt 2 ]; then
+            # source edilmişse return, executable olarak çağrıldıysa exit 0
+            return 0 2>/dev/null || exit 0
+          fi
+          set -euo pipefail
           out="$1"; shift
           for p in "$@"; do
             if [ -f "$p" ]; then
               echo "✔ Found input: $p"
+              # GitHub Actions step shell'ünde env değişkeni export et
+              # (aynı step içinde kullanılacak)
               export "${out}"="$p"
-              return 0
+              # Ayrıca çıktıya yaz (isteğe bağlı debug)
+              echo "${out}=$p"
+              exit 0
             fi
           done
           echo "✖ Input not found among candidates:" "$@" 1>&2
-          return 1
+          exit 1
           BASH
           chmod +x pick_input.sh
 
@@ -311,20 +321,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          . ./pick_input.sh || true
-          # 05 için beklenen girdi: sf_crime_03 (nüfus sonrası)
           ./pick_input.sh CRIME_INPUT \
             "${CRIME_DATA_DIR}/sf_crime_03.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_03.csv" \
             "${CRIME_DATA_DIR}/sf_crime.parquet" \
             "${CRIME_DATA_DIR}/sf_crime.csv" || { echo "❌ Bus adımı için girdi yok"; exit 2; }
-          echo "CRIME_INPUT=$CRIME_INPUT"
           export CRIME_INPUT
+          echo "CRIME_INPUT=$CRIME_INPUT"
           python -u update_bus.py
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_04.parquet"
           OUT_CSV="${CRIME_DATA_DIR}/sf_crime_04.csv"
           test -f "$OUT_PARQ" -o -f "$OUT_CSV" || { echo "❌ Bus çıktısı yok (sf_crime_04.*)"; exit 2; }
-
+      
       - name: 06) Tren (BART) → sf_crime_05.parquet
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
@@ -334,28 +342,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          . ./pick_input.sh || true
-          # 06 için beklenen girdi: sf_crime_04 (bus sonrası)
           ./pick_input.sh CRIME_INPUT \
             "${CRIME_DATA_DIR}/sf_crime_04.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_04.csv" \
             "${CRIME_DATA_DIR}/sf_crime_03.parquet" \
-            "${CRIME_DATA_DIR}/sf_crime_03.csv" \
-            "sf_crime_04.parquet" "sf_crime_04.csv" || { echo "❌ Tren adımı için girdi yok"; exit 2; }
-          echo "CRIME_INPUT=$CRIME_INPUT"
+            "${CRIME_DATA_DIR}/sf_crime_03.csv" || { echo "❌ Tren adımı için girdi yok"; exit 2; }
           export CRIME_INPUT
+          echo "CRIME_INPUT=$CRIME_INPUT"
           python -u update_train.py
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_05.parquet"
           OUT_CSV="${CRIME_DATA_DIR}/sf_crime_05.csv"
           test -f "$OUT_PARQ" -o -f "$OUT_CSV" || { echo "❌ Tren çıktısı yok (sf_crime_05.*)"; exit 2; }
-          if [ -f "$OUT_PARQ" ]; then
-            python - <<'PY'
-            import os, polars as pl
-            p=os.path.join(os.environ["CRIME_DATA_DIR"],"sf_crime_05.parquet")
-            if os.path.exists(p): print(pl.scan_parquet(p).head(5).collect())
-            PY
-          fi
-
+      
       - name: 07) POI zenginleştirme → sf_crime_06.parquet
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
@@ -365,22 +363,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          . ./pick_input.sh || true
-          # 07 için beklenen girdi: sf_crime_05 (train sonrası)
           ./pick_input.sh CRIME_INPUT \
             "${CRIME_DATA_DIR}/sf_crime_05.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_05.csv" \
             "${CRIME_DATA_DIR}/sf_crime_04.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_04.csv" || { echo "❌ POI adımı için girdi yok"; exit 2; }
-          echo "CRIME_INPUT=$CRIME_INPUT"
           export CRIME_INPUT
+          echo "CRIME_INPUT=$CRIME_INPUT"
           if [ -f update_poi.py ]; then python -u update_poi.py;
           elif [ -f pipeline_make_sf_crime_06.py ]; then python -u pipeline_make_sf_crime_06.py;
           else echo "❌ POI script bulunamadı"; exit 2; fi
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_06.parquet"
           OUT_CSV="${CRIME_DATA_DIR}/sf_crime_06.csv"
           test -f "$OUT_PARQ" -o -f "$OUT_CSV" || { echo "❌ POI çıktısı yok (sf_crime_06.*)"; exit 2; }
-
+      
       - name: 08) Polis & Devlet binaları → sf_crime_07.parquet
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
@@ -390,22 +386,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          . ./pick_input.sh || true
-          # 08 için beklenen girdi: sf_crime_06 (poi sonrası)
           ./pick_input.sh CRIME_INPUT \
             "${CRIME_DATA_DIR}/sf_crime_06.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_06.csv" \
             "${CRIME_DATA_DIR}/sf_crime_05.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_05.csv" || { echo "❌ Polis/Gov adımı için girdi yok"; exit 2; }
-          echo "CRIME_INPUT=$CRIME_INPUT"
           export CRIME_INPUT
+          echo "CRIME_INPUT=$CRIME_INPUT"
           if [ -f update_police_gov.py ]; then python -u update_police_gov.py;
           elif [ -f scripts/enrich_police_gov_06_to_07.py ]; then python -u scripts/enrich_police_gov_06_to_07.py;
           else echo "❌ Polis/Gov script bulunamadı"; exit 2; fi
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_07.parquet"
           OUT_CSV="${CRIME_DATA_DIR}/sf_crime_07.csv"
           test -f "$OUT_PARQ" -o -f "$OUT_CSV" || { echo "❌ Polis/Gov çıktısı yok (sf_crime_07.*)"; exit 2; }
-
+      
       - name: 09) Hava durumu → sf_crime_08.parquet
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
@@ -415,28 +409,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          . ./pick_input.sh || true
-          # 09 için beklenen girdi: sf_crime_07 (polis/gov sonrası)
           ./pick_input.sh CRIME_INPUT \
             "${CRIME_DATA_DIR}/sf_crime_07.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_07.csv" \
             "${CRIME_DATA_DIR}/sf_crime_06.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_06.csv" || { echo "❌ Weather adımı için girdi yok"; exit 2; }
-          echo "CRIME_INPUT=$CRIME_INPUT"
           export CRIME_INPUT
+          echo "CRIME_INPUT=$CRIME_INPUT"
           if [ -f update_weather.py ]; then python -u update_weather.py;
           elif [ -f scripts/update_weather.py ]; then python -u scripts/update_weather.py;
           else echo "❌ Weather script not found"; exit 2; fi
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_08.parquet"
           OUT_CSV="${CRIME_DATA_DIR}/sf_crime_08.csv"
           test -f "$OUT_PARQ" -o -f "$OUT_CSV" || { echo "❌ Weather çıktısı yok (sf_crime_08.*)"; exit 2; }
-          if [ -f "$OUT_PARQ" ]; then
-            python - <<'PY'
-            import os, polars as pl
-            p=os.path.join(os.environ["CRIME_DATA_DIR"],"sf_crime_08.parquet")
-            if os.path.exists(p): print(pl.scan_parquet(p).head(5).collect())
-            PY
-          fi
 
       - name: 10) neighbors.csv (normalize/üret + kalite kontrol)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
