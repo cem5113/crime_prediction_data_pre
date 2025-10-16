@@ -396,25 +396,7 @@ jobs:
           # kalite kontrol + gerekirse rebuild (script aynı kaldı)
           if [ -f "${CRIME_DATA_DIR}/.rebuild_neighbors" ]; then rm -f "${CRIME_DATA_DIR}/.rebuild_neighbors"; fi
 
-      - name: 11) Hava durumu (SON ADIM, grid-level) → STACKING_DATASET’e ekle
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        env:
-          STACKING_IN:  ${{ env.CRIME_DATA_DIR }}/sf_crime_events_enriched.csv
-          STACKING_OUT: ${{ env.CRIME_DATA_DIR }}/sf_crime_events_enriched.csv
-          WX_LOCATION:  ${{ env.WX_LOCATION }}
-          WX_UNIT:      ${{ env.WX_UNIT }}
-        run: |
-          set -e
-          if [ -f update_weather.py ]; then
-            python -u update_weather.py --scope grid --join-keys date,hour --grid-in "${STACKING_IN}" --grid-out "${STACKING_OUT}" --location "${WX_LOCATION}" --unit "${WX_UNIT}"
-          elif [ -f scripts/update_weather.py ]; then
-            python -u scripts/update_weather.py --scope grid --join-keys date,hour --grid-in "${STACKING_IN}" --grid-out "${STACKING_OUT}" --location "${WX_LOCATION}" --unit "${WX_UNIT}"
-          else
-            echo "❌ Weather script not found"; exit 2
-          fi
-          echo "📄 Weather eklendi → ${STACKING_OUT} (ilk 5 satır)"; head -n 5 "${STACKING_OUT}" || true
-
-      - name: 11.5) Olay-bazlı zenginleştirme (grid → sf_crime.csv merge)
+      - name: 11) Olay-bazlı zenginleştirme (grid → sf_crime.csv merge)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
           CRIME_DIR: ${{ env.CRIME_DATA_DIR }}
@@ -464,7 +446,7 @@ jobs:
       
           # GEOID normalize (sadece rakam, soldan sıfır doldur)
           def norm_geoid(s, L=11):
-              return (s.astype(str).str.extract(r"(\\d+)", expand=False).fillna("").str.zfill(L))
+              return (s.astype(str).str.extract(r"(\d+)", expand=False).fillna("").str.zfill(L))
           gcol_e = cols.get("geoid") or cols.get("geography_id") or "GEOID"
           df_e["GEOID"] = norm_geoid(df_e[gcol_e] if gcol_e in df_e.columns else df_e["GEOID"])
       
@@ -503,14 +485,32 @@ jobs:
           y_path.write_bytes(Path(OUT_PATH).read_bytes())
           PY
 
-      - name: 12) Install ML deps for stacking
+      - name: 12) Hava durumu (SON ADIM, grid-level) → STACKING_DATASET’e ekle
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          STACKING_IN:  ${{ env.CRIME_DATA_DIR }}/sf_crime_events_enriched.csv
+          STACKING_OUT: ${{ env.CRIME_DATA_DIR }}/sf_crime_events_enriched.csv
+          WX_LOCATION:  ${{ env.WX_LOCATION }}
+          WX_UNIT:      ${{ env.WX_UNIT }}
+        run: |
+          set -e
+          if [ -f update_weather.py ]; then
+            python -u update_weather.py --scope grid --join-keys date,hour --grid-in "${STACKING_IN}" --grid-out "${STACKING_OUT}" --location "${WX_LOCATION}" --unit "${WX_UNIT}"
+          elif [ -f scripts/update_weather.py ]; then
+            python -u scripts/update_weather.py --scope grid --join-keys date,hour --grid-in "${STACKING_IN}" --grid-out "${STACKING_OUT}" --location "${WX_LOCATION}" --unit "${WX_UNIT}"
+          else
+            echo "❌ Weather script not found"; exit 2
+          fi
+          echo "📄 Weather eklendi → ${STACKING_OUT} (ilk 5 satır)"; head -n 5 "${STACKING_OUT}" || true
+
+      - name: 13) Install ML deps for stacking
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         run: |
           python -m pip install -U pip wheel setuptools
           pip install pandas numpy scikit-learn joblib
           pip install xgboost lightgbm || true
 
-      - name: 13) Run stacking risk pipeline
+      - name: 14) Run stacking risk pipeline
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
           STACKING_DATASET: ${{ env.CRIME_DATA_DIR }}/sf_crime_events_enriched.csv
@@ -525,7 +525,7 @@ jobs:
           python -u stacking_risk_pipeline.py
 
       # --- FINAL: *_y.csv snapshot + Parquet + ZIP + Upload ---
-      - name: 14) Snapshot (_y.csv) üret ve parquet’e çevir
+      - name: 15) Snapshot (_y.csv) üret ve parquet’e çevir
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         run: |
           set -e
@@ -555,7 +555,7 @@ jobs:
                   print("⚠️ Parquet/snapshot atlandı:", p, e)
           PY
 
-      - name: 15) Zip sonuçlar (crime_prediction_data_pre.zip)
+      - name: 16) Zip sonuçlar (crime_prediction_data_pre.zip)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         run: |
           set -e
@@ -563,7 +563,7 @@ jobs:
           zip -r "${ARTIFACT_ZIP}" "${CRIME_DATA_DIR}" -x "*.git*" || true
           echo "📦 Oluşturuldu → ${ARTIFACT_ZIP}"
 
-      - name: 16) Upload artifact (cem5113/crime_prediction_data_pre tarzı)
+      - name: 17) Upload artifact (cem5113/crime_prediction_data_pre tarzı)
         if: ${{ steps.gate.outputs.proceed == 'true' && github.event.inputs.persist != 'none' }}
         uses: actions/upload-artifact@v4
         with:
