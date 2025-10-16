@@ -31,9 +31,9 @@ env:
   GEOID_LEN: "11"
 
   # I/O davranışı
-  USE_PARQUET: "1"           # 🔴 tüm ara çıktı & final çıktılar parquet
-  ID_BASED: "1"              # 🔴 satır = olay (ID), grid joinleri ID’den
-  LABEL_STYLE: "legacy01"    # 🔴 Y_label = 0/1 eski usul (var/yok)
+  USE_PARQUET: "1"           # tüm ara çıktı & final çıktılar parquet
+  ID_BASED: "1"              # satır = olay (ID), grid joinleri ID’den
+  LABEL_STYLE: "legacy01"    # Y_label = 0/1
 
   # Horizonlar (forecast ön-hesap)
   HORIZONS: "24h,7d,30d,90d,365d"
@@ -218,22 +218,16 @@ jobs:
           python - <<'PY'
           import os, pandas as pd
           import pyarrow as pa, pyarrow.parquet as pq
-
           p = os.path.join(os.environ["CRIME_DATA_DIR"], "sf_population.csv")
           q = os.path.join(os.environ["CRIME_DATA_DIR"], "sf_population.parquet")
-
           df = pd.read_csv(p, low_memory=False)
-
-          # Sütun isimlerini normalize et
           low = {c.lower(): c for c in df.columns}
           if 'geoid' not in low and 'geography_id' in low:
               df.rename(columns={low['geography_id']:'GEOID'}, inplace=True)
-
           for cand in ['population','total_population','b01003_001e','estimate','total','value']:
               if cand in low and 'population' not in df.columns:
                   df.rename(columns={low[cand]:'population'}, inplace=True)
                   break
-
           table = pa.Table.from_pandas(df)
           pq.write_table(table, q, compression="zstd")
           print("✅ population → parquet:", q)
@@ -248,38 +242,42 @@ jobs:
           DEMOG_WHITELIST:  ${{ env.DEMOG_WHITELIST }}
           USE_PARQUET:      "true"
           ID_BASED:         ${{ env.ID_BASED }}
+          CRIME_DATA_DIR:   ${{ env.CRIME_DATA_DIR }}
         run: |
-          set -e
-          python - <<'PY'
-          import os, pandas as pd
+          set -euo pipefail
+          if [ -f update_population.py ]; then
+            python -u update_population.py
+          elif [ -f scripts/update_population.py ]; then
+            python -u scripts/update_population.py
+          else
+            echo "⚠ update_population.py bulunamadı; köprü adımı devreye girebilir."
+          fi
+          if [ -f "${CRIME_DATA_DIR}/sf_crime_03.parquet" ] || [ -f "${CRIME_DATA_DIR}/sf_crime_03.csv" ]; then
+            echo "✅ sf_crime_03.* mevcut."
+          else
+            echo "⚠ sf_crime_03.* üretilmedi."
+          fi
 
-          path = os.environ["POPULATION_PATH"]
-          use_parquet = os.getenv("USE_PARQUET", "false").lower() in ("1", "true", "yes")
-
-          # Güvenli şekilde oku (parquet veya csv)
-          def load_population(p):
-              ext = os.path.splitext(p)[1].lower()
-              if use_parquet or ext == ".parquet":
-                  return pd.read_parquet(p)
-              try:
-                  return pd.read_csv(p, low_memory=False, dtype=str, encoding="utf-8-sig")
-              except UnicodeDecodeError:
-                  return pd.read_csv(p, low_memory=False, dtype=str, encoding="latin1")
-
-          pop = load_population(path)
-
-          # Sütun isimlerini normalize et
-          low = {c.lower(): c for c in pop.columns}
-          if 'geoid' not in low and 'geography_id' in low:
-              pop.rename(columns={low['geography_id']:'GEOID'}, inplace=True)
-          for cand in ['population','total_population','b01003_001e','estimate','total','value']:
-              if cand in low and 'population' not in pop.columns:
-                  pop.rename(columns={low[cand]:'population'}, inplace=True)
-                  break
-
-          print("✅ Nüfus verisi başarıyla yüklendi:", path)
-          print(pop.head())
-          PY
+      - name: 04.b) Köprü — sf_crime_03.* üret (gerekiyorsa)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "${CRIME_DATA_DIR}/sf_crime_03.parquet" ] || [ -f "${CRIME_DATA_DIR}/sf_crime_03.csv" ]; then
+            echo "sf_crime_03.* zaten var."
+            exit 0
+          fi
+          echo "⚠ sf_crime_03.* yok; mevcut tabandan kopyalanacak."
+          if   [ -f "${CRIME_DATA_DIR}/sf_crime_02.parquet" ]; then cp -f "${CRIME_DATA_DIR}/sf_crime_02.parquet" "${CRIME_DATA_DIR}/sf_crime_03.parquet"
+          elif [ -f "${CRIME_DATA_DIR}/sf_crime_02.csv"     ]; then cp -f "${CRIME_DATA_DIR}/sf_crime_02.csv"     "${CRIME_DATA_DIR}/sf_crime_03.csv"
+          elif [ -f "${CRIME_DATA_DIR}/sf_crime.parquet"    ]; then cp -f "${CRIME_DATA_DIR}/sf_crime.parquet"    "${CRIME_DATA_DIR}/sf_crime_03.parquet"
+          elif [ -f "${CRIME_DATA_DIR}/sf_crime.csv"        ]; then cp -f "${CRIME_DATA_DIR}/sf_crime.csv"        "${CRIME_DATA_DIR}/sf_crime_03.csv"
+          else
+            echo "❌ sf_crime_02.* / sf_crime.* da yok; 03 üretilemedi"; exit 2
+          fi
+          ls -lah "${CRIME_DATA_DIR}"/sf_crime_03.*
 
       # ---- GİRDİ SEÇİCİ YARDIMCI (bus/train/... için kullanılacak) ----
       - name: Helper — pick_input function
@@ -291,7 +289,6 @@ jobs:
           # usage: pick_input OUT_ENV_NAME CAND1 [CAND2 ...]
           # Argüman yoksa (ör. yanlışlıkla source edilirse) sessizce çık:
           if [ "$#" -lt 2 ]; then
-            # source edilmişse return, executable olarak çağrıldıysa exit 0
             return 0 2>/dev/null || exit 0
           fi
           set -euo pipefail
@@ -299,10 +296,7 @@ jobs:
           for p in "$@"; do
             if [ -f "$p" ]; then
               echo "✔ Found input: $p"
-              # GitHub Actions step shell'ünde env değişkeni export et
-              # (aynı step içinde kullanılacak)
               export "${out}"="$p"
-              # Ayrıca çıktıya yaz (isteğe bağlı debug)
               echo "${out}=$p"
               exit 0
             fi
@@ -332,7 +326,7 @@ jobs:
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_04.parquet"
           OUT_CSV="${CRIME_DATA_DIR}/sf_crime_04.csv"
           test -f "$OUT_PARQ" -o -f "$OUT_CSV" || { echo "❌ Bus çıktısı yok (sf_crime_04.*)"; exit 2; }
-      
+
       - name: 06) Tren (BART) → sf_crime_05.parquet
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
@@ -353,7 +347,7 @@ jobs:
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_05.parquet"
           OUT_CSV="${CRIME_DATA_DIR}/sf_crime_05.csv"
           test -f "$OUT_PARQ" -o -f "$OUT_CSV" || { echo "❌ Tren çıktısı yok (sf_crime_05.*)"; exit 2; }
-      
+
       - name: 07) POI zenginleştirme → sf_crime_06.parquet
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
@@ -376,7 +370,7 @@ jobs:
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_06.parquet"
           OUT_CSV="${CRIME_DATA_DIR}/sf_crime_06.csv"
           test -f "$OUT_PARQ" -o -f "$OUT_CSV" || { echo "❌ POI çıktısı yok (sf_crime_06.*)"; exit 2; }
-      
+
       - name: 08) Polis & Devlet binaları → sf_crime_07.parquet
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
@@ -399,7 +393,7 @@ jobs:
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_07.parquet"
           OUT_CSV="${CRIME_DATA_DIR}/sf_crime_07.csv"
           test -f "$OUT_PARQ" -o -f "$OUT_CSV" || { echo "❌ Polis/Gov çıktısı yok (sf_crime_07.*)"; exit 2; }
-      
+
       - name: 09) Hava durumu → sf_crime_08.parquet
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
