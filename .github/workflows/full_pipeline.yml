@@ -236,26 +236,28 @@ jobs:
       - name: 04) Nüfus → sf_crime_03.parquet (demografi + nüfus)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
-          POPULATION_PATH:  ${{ env.CRIME_DATA_DIR }}/sf_population.parquet
+          POPULATION_PATH:  ${{ env.CRIME_DATA_DIR }}/sf_population.csv   # <-- CSV'ye çekildi
           CENSUS_GEO_LEVEL: ${{ env.CENSUS_GEO_LEVEL }}
           ACS_YEAR:         ${{ env.ACS_YEAR }}
           DEMOG_WHITELIST:  ${{ env.DEMOG_WHITELIST }}
-          USE_PARQUET:      "true"
+          USE_PARQUET:      "false"                                       # opsiyonel; script zaten CSV okuyor
           ID_BASED:         ${{ env.ID_BASED }}
           CRIME_DATA_DIR:   ${{ env.CRIME_DATA_DIR }}
         run: |
           set -euo pipefail
+          # Script CSV bekliyor; doğrudan çalıştırıyoruz
           if [ -f update_population.py ]; then
             python -u update_population.py
           elif [ -f scripts/update_population.py ]; then
             python -u scripts/update_population.py
           else
-            echo "⚠ update_population.py bulunamadı; köprü adımı devreye girebilir."
+            echo "❌ update_population.py bulunamadı"; exit 2
           fi
+          # Çıktı kontrolü (varsa bilgi ver, yoksa köprü adımı devreye girecek)
           if [ -f "${CRIME_DATA_DIR}/sf_crime_03.parquet" ] || [ -f "${CRIME_DATA_DIR}/sf_crime_03.csv" ]; then
-            echo "✅ sf_crime_03.* mevcut."
+            echo "✅ sf_crime_03.* üretildi."
           else
-            echo "⚠ sf_crime_03.* üretilmedi."
+            echo "⚠ sf_crime_03.* üretilmedi; bir sonraki köprü adımı devreye girebilir."
           fi
 
       - name: 04.b) Köprü — sf_crime_03.* üret (gerekiyorsa)
