@@ -356,7 +356,7 @@ jobs:
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
           CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
-          STACKING_DATASET: ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
+          STACKING_DATASET: ${{ env.CRIME_DATA_DIR }}/sf_crime_events_enriched.csv
           NEIGHBOR_FILE: ${{ env.CRIME_DATA_DIR }}/neighbors.csv
           NEIGHBOR_STRATEGY: queen
           MIN_NEIGHBOR_DEG: "3"
@@ -397,8 +397,8 @@ jobs:
       - name: 11) Hava durumu (SON ADIM, grid-level) → STACKING_DATASET’e ekle
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
-          STACKING_IN:  ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
-          STACKING_OUT: ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
+          STACKING_IN:  ${{ env.CRIME_DATA_DIR }}/sf_crime_events_enriched.csv
+          STACKING_OUT: ${{ env.CRIME_DATA_DIR }}/sf_crime_events_enriched.csv
           WX_LOCATION:  ${{ env.WX_LOCATION }}
           WX_UNIT:      ${{ env.WX_UNIT }}
         run: |
@@ -416,7 +416,7 @@ jobs:
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
           CRIME_DIR: ${{ env.CRIME_DATA_DIR }}
-          GRID_PATH: ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
+          GRID_PATH: ${{ env.CRIME_DATA_DIR }}/sf_crime_events_enriched.csv
           CRIME_PATH: ${{ env.CRIME_DATA_DIR }}/sf_crime.csv
           OUT_PATH: ${{ env.CRIME_DATA_DIR }}/sf_crime_events_enriched.csv
         run: |
@@ -493,7 +493,7 @@ jobs:
       - name: 13) Run stacking risk pipeline
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
-          STACKING_DATASET: ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
+          STACKING_DATASET: ${{ env.CRIME_DATA_DIR }}/sf_crime_events_enriched.csv
           ENABLE_SPATIAL_TE: "1"
           TE_ALPHA: "50"
           NEIGHBOR_FILE: ${{ env.CRIME_DATA_DIR }}/neighbors.csv
