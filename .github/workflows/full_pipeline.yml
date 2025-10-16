@@ -620,389 +620,397 @@ jobs:
               print("REBUILD=0 → yeterli kalite")
           PY
 
-          # 4) Yeniden üretim gerekiyorsa
-          if [ -f "${CRIME_DATA_DIR}/.rebuild_neighbors" ]; then
-            if [ ! -f "${NEIGHBOR_POLY}" ]; then
-              echo "⚠️ Polygon katmanı yok: ${NEIGHBOR_POLY}. Mevcut neighbors.csv kullanılacak."
-            else
-              echo "🔧 Komşuluk yeniden oluşturuluyor (${NEIGHBOR_STRATEGY}, min_deg=${MIN_NEIGHBOR_DEG}, knn_k=${KNN_K})"
+- name: "10.5) neighbors.csv (kullan/normalize/üret + kalite kontrol)"
+  run: |
+    set -euo pipefail
+    # 4) Yeniden üretim gerekiyorsa
+    if [ -f "${CRIME_DATA_DIR}/.rebuild_neighbors" ]; then
+      if [ ! -f "${NEIGHBOR_POLY}" ]; then
+        echo "⚠️ Polygon katmanı yok: ${NEIGHBOR_POLY}. Mevcut neighbors.csv kullanılacak."
+      else
+        echo "🔧 Komşuluk yeniden oluşturuluyor (${NEIGHBOR_STRATEGY}, min_deg=${MIN_NEIGHBOR_DEG}, knn_k=${KNN_K})"
 
-              cat > _rebuild_neighbors.py <<'PY'
-              
-#!/usr/bin/env python3
-from __future__ import annotations
-import os, re
-from pathlib import Path
-import pandas as pd
-try:
-    import geopandas as gpd
-except Exception:
-    gpd = None
+        # DİKKAT: 'PY' kapanışı tam bu sütunda, boşluksuz olmalı
+        cat <<-'PY' > _rebuild_neighbors.py
+        #!/usr/bin/env python3
+        from __future__ import annotations
+        import os, re
+        from pathlib import Path
+        import pandas as pd
+        try:
+            import geopandas as gpd
+        except Exception:
+            gpd = None
 
-CRIME_DIR  = Path(os.environ.get("CRIME_DATA_DIR","crime_prediction_data"))
-GEOID_LEN  = int(os.environ.get("GEOID_LEN","11"))
-STRATEGY   = os.environ.get("NEIGHBOR_STRATEGY","queen").lower()
-MIN_DEG    = int(os.environ.get("MIN_NEIGHBOR_DEG","3"))
-KNN_K      = int(os.environ.get("KNN_K","5"))
-OUT_PATH   = Path(os.environ.get("NEIGHBOR_FILE", str(CRIME_DIR/"neighbors.csv")))
-GRID_CSV   = Path(os.environ.get("STACKING_DATASET", str(CRIME_DIR/"sf_crime_grid_full_labeled.csv")))
-POLY_HINT  = os.environ.get("NEIGHBOR_POLY","")
+        CRIME_DIR  = Path(os.environ.get("CRIME_DATA_DIR","crime_prediction_data"))
+        GEOID_LEN  = int(os.environ.get("GEOID_LEN","11"))
+        STRATEGY   = os.environ.get("NEIGHBOR_STRATEGY","queen").lower()
+        MIN_DEG    = int(os.environ.get("MIN_NEIGHBOR_DEG","3"))
+        KNN_K      = int(os.environ.get("KNN_K","5"))
+        OUT_PATH   = Path(os.environ.get("NEIGHBOR_FILE", str(CRIME_DIR/"neighbors.csv")))
+        GRID_CSV   = Path(os.environ.get("STACKING_DATASET", str(CRIME_DIR/"sf_crime_grid_full_labeled.csv")))
+        POLY_HINT  = os.environ.get("NEIGHBOR_POLY","")
 
-def _norm(s: pd.Series) -> pd.Series:
-    return s.astype(str).str.extract(r"(\d+)", expand=False).str.zfill(GEOID_LEN)
-def _sym(df: pd.DataFrame) -> pd.DataFrame:
-    rev = df.rename(columns={"geoid":"neighbor","neighbor":"geoid"})
-    out = pd.concat([df, rev], ignore_index=True)
-    out = out[out["geoid"] != out["neighbor"]]
-    return out.drop_duplicates()
-def _neighbors_from_polygons(path: str) -> pd.DataFrame | None:
-    if not gpd:
-        return None
-    try:
-        gdf = gpd.read_file(path)
-    except Exception:
-        return None
-    low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in gdf.columns}
-    gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid") or list(gdf.columns)[0]
-    if "geometry" not in gdf.columns:
-        return None
-    gdf = gdf[[gcol,"geometry"]].rename(columns={gcol:"geoid"}).copy()
-    gdf["geoid"] = _norm(gdf["geoid"])
-    gdf = gdf[gdf["geometry"].notna()].reset_index(drop=True)
-    pairs = gdf.sindex.query_bulk(gdf.geometry, predicate="touches")
-    i, j = pairs
-    m = pd.DataFrame({"i": i, "j": j})
-    m = m[m["i"] < m["j"]]
-    df = pd.DataFrame({
-        "geoid":    gdf.loc[m["i"], "geoid"].to_numpy(),
-        "neighbor": gdf.loc[m["j"], "geoid"].to_numpy(),
-    })
-    return _sym(df.drop_duplicates())
-def _centroids_table(poly_ok: bool) -> pd.DataFrame | None:
-    if poly_ok and gpd:
-        gdf = gpd.read_file(POLY_HINT)
-        low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in gdf.columns}
-        gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid") or list(gdf.columns)[0]
-        c = gdf[[gcol,"geometry"]].rename(columns={gcol:"geoid"}).copy()
-        c["geoid"] = _norm(c["geoid"])
-        cent = c.geometry.centroid
-        return pd.DataFrame({"geoid": c["geoid"], "x": cent.x, "y": cent.y})
-    if GRID_CSV.exists():
-        df = pd.read_csv(GRID_CSV, dtype=str, low_memory=False)
-        low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in df.columns}
-        gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid")
-        lat  = low.get("lat") or low.get("latitude") or low.get("centroidlat")
-        lon  = low.get("lon") or low.get("lng") or low.get("longitude") or low.get("centroidlon")
-        if gcol and lat and lon:
-            t = df[[gcol, lat, lon]].rename(columns={gcol:"geoid", lat:"y", lon:"x"}).copy()
-            t["geoid"] = _norm(t["geoid"])
-            t["x"] = pd.to_numeric(t["x"], errors="coerce")
-            t["y"] = pd.to_numeric(t["y"], errors="coerce")
-            return t.dropna()
-    return None
-def _ensure_min_degree(nb: pd.DataFrame, geos: pd.DataFrame) -> pd.DataFrame:
-    import numpy as np
-    if geos is None or geos.empty:
-        return nb
-    deg = nb.groupby("geoid")["neighbor"].nunique()
-    need = set(deg.index[deg < MIN_DEG] if not deg.empty else geos["geoid"])
-    if not need:
-        return nb
-    idx = {g:i for i,g in enumerate(geos["geoid"])}
-    XY  = geos[["x","y"]].to_numpy()
-    add = []
-    for g in need:
-        i = idx[g]
-        d = np.sum((XY - XY[i])**2, axis=1)
-        order = np.argsort(d)
-        picks = []
-        for j in order:
-            gj = geos.iloc[j]["geoid"]
-            if gj == g:
-                continue
-            picks.append(gj)
-            if len(picks) >= KNN_K:
-                break
-        add += [(g, n) for n in picks]
-    nb2 = pd.concat([nb, pd.DataFrame(add, columns=["geoid","neighbor"])], ignore_index=True)
-    return _sym(nb2.drop_duplicates())
-def main():
-    poly_ok = bool(POLY_HINT) and Path(POLY_HINT).exists()
-    nb = _neighbors_from_polygons(POLY_HINT) if poly_ok else pd.DataFrame(columns=["geoid","neighbor"])
-    cent = _centroids_table(poly_ok)
-    nb = _ensure_min_degree(nb, cent)
-    if nb.empty:
-        nb = pd.DataFrame(columns=["geoid","neighbor"])
-    nb["geoid"] = _norm(nb["geoid"])
-    nb["neighbor"] = _norm(nb["neighbor"])
-    nb = _sym(nb).drop_duplicates().sort_values(["geoid","neighbor"])
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    nb.to_csv(OUT_PATH, index=False)
-    deg = nb.groupby("geoid")["neighbor"].nunique()
-    print(f"neighbors.csv yazıldı → {OUT_PATH} | n_edges={len(nb)} | n_nodes={len(deg)} | min_deg={int(deg.min()) if len(deg) else 0} | mean_deg={round(float(deg.mean()),2) if len(deg) else 0.0}")
-if __name__ == "__main__":
-    main()
-PY
-              python _rebuild_neighbors.py
-              rm -f _rebuild_neighbors.py
-              rm -f "${CRIME_DATA_DIR}/.rebuild_neighbors"
-            fi
-          fi
+        def _norm(s: pd.Series) -> pd.Series:
+            return s.astype(str).str.extract(r"(\d+)", expand=False).str.zfill(GEOID_LEN)
 
-          echo "neighbors.csv (ilk 10 satır):"
-          head -n 10 "${DEST}" || true
+        def _sym(df: pd.DataFrame) -> pd.DataFrame:
+            rev = df.rename(columns={"geoid":"neighbor","neighbor":"geoid"})
+            out = pd.concat([df, rev], ignore_index=True)
+            out = out[out["geoid"] != out["neighbor"]]
+            return out.drop_duplicates()
 
+        def _neighbors_from_polygons(path: str) -> pd.DataFrame | None:
+            if not gpd:
+                return None
+            try:
+                gdf = gpd.read_file(path)
+            except Exception:
+                return None
+            low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in gdf.columns}
+            gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid") or list(gdf.columns)[0]
+            if "geometry" not in gdf.columns:
+                return None
+            gdf = gdf[[gcol,"geometry"]].rename(columns={gcol:"geoid"}).copy()
+            gdf["geoid"] = _norm(gdf["geoid"])
+            gdf = gdf[gdf["geometry"].notna()].reset_index(drop=True)
+            pairs = gdf.sindex.query_bulk(gdf.geometry, predicate="touches")
+            i, j = pairs
+            m = pd.DataFrame({"i": i, "j": j})
+            m = m[m["i"] < m["j"]]
+            df = pd.DataFrame({
+                "geoid":    gdf.loc[m["i"], "geoid"].to_numpy(),
+                "neighbor": gdf.loc[m["j"], "geoid"].to_numpy(),
+            })
+            return _sym(df.drop_duplicates())
 
+        def _centroids_table(poly_ok: bool) -> pd.DataFrame | None:
+            if poly_ok and gpd:
+                gdf = gpd.read_file(POLY_HINT)
+                low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in gdf.columns}
+                gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid") or list(gdf.columns)[0]
+                c = gdf[[gcol,"geometry"]].rename(columns={gcol:"geoid"}).copy()
+                c["geoid"] = _norm(c["geoid"])
+                cent = c.geometry.centroid
+                return pd.DataFrame({"geoid": c["geoid"], "x": cent.x, "y": cent.y})
+            if GRID_CSV.exists():
+                df = pd.read_csv(GRID_CSV, dtype=str, low_memory=False)
+                low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in df.columns}
+                gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid")
+                lat  = low.get("lat") or low.get("latitude") or low.get("centroidlat")
+                lon  = low.get("lon") or low.get("lng") or low.get("longitude") or low.get("centroidlon")
+                if gcol and lat and lon:
+                    t = df[[gcol, lat, lon]].rename(columns={gcol:"geoid", lat:"y", lon:"x"}).copy()
+                    t["geoid"] = _norm(t["geoid"])
+                    t["x"] = pd.to_numeric(t["x"], errors="coerce")
+                    t["y"] = pd.to_numeric(t["y"], errors="coerce")
+                    return t.dropna()
+            return None
 
+        def _ensure_min_degree(nb: pd.DataFrame, geos: pd.DataFrame) -> pd.DataFrame:
+            import numpy as np
+            if geos is None or geos.empty:
+                return nb
+            deg = nb.groupby("geoid")["neighbor"].nunique()
+            need = set(deg.index[deg < MIN_DEG] if not deg.empty else geos["geoid"])
+            if not need:
+                return nb
+            idx = {g:i for i,g in enumerate(geos["geoid"])}
+            XY  = geos[["x","y"]].to_numpy()
+            add = []
+            for g in need:
+                i = idx[g]
+                d = np.sum((XY - XY[i])**2, axis=1)
+                order = np.argsort(d)
+                picks = []
+                for j in order:
+                    gj = geos.iloc[j]["geoid"]
+                    if gj == g:
+                        continue
+                    picks.append(gj)
+                    if len(picks) >= KNN_K:
+                        break
+                add += [(g, n) for n in picks]
+            nb2 = pd.concat([nb, pd.DataFrame(add, columns=["geoid","neighbor"])], ignore_index=True)
+            return _sym(nb2.drop_duplicates())
 
-      - name: 11) Install ML deps for stacking
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        run: |
-          python -m pip install -U pip wheel setuptools
-          pip install pandas numpy scikit-learn joblib
-          pip install xgboost lightgbm || true
+        def main():
+            poly_ok = bool(POLY_HINT) and Path(POLY_HINT).exists()
+            nb = _neighbors_from_polygons(POLY_HINT) if poly_ok else pd.DataFrame(columns=["geoid","neighbor"])
+            cent = _centroids_table(poly_ok)
+            nb = _ensure_min_degree(nb, cent)
+            if nb.empty:
+                nb = pd.DataFrame(columns=["geoid","neighbor"])
+            nb["geoid"] = _norm(nb["geoid"])
+            nb["neighbor"] = _norm(nb["neighbor"])
+            nb = _sym(nb).drop_duplicates().sort_values(["geoid","neighbor"])
+            OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            nb.to_csv(OUT_PATH, index=False)
+            deg = nb.groupby("geoid")["neighbor"].nunique()
+            print(f"neighbors.csv yazıldı → {OUT_PATH} | n_edges={len(nb)} | n_nodes={len(deg)} | min_deg={int(deg.min()) if len(deg) else 0} | mean_deg={round(float(deg.mean()),2) if len(deg) else 0.0}")
 
-      - name: 12) Run stacking risk pipeline
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        env:
-          STACKING_DATASET: ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
-          ENABLE_SPATIAL_TE: "1"
-          TE_ALPHA: "50"
-          NEIGHBOR_FILE: ${{ env.CRIME_DATA_DIR }}/neighbors.csv
-          ENABLE_TE_ABLATION: "1"
-          ABLASYON_BASIS: "ohe"
-        run: |
-          set -e
-          if [ ! -f "${STACKING_DATASET}" ]; then
-            echo "❌ STACKING_DATASET bulunamadı: ${STACKING_DATASET}"
-            exit 2
-          fi
-          python -u stacking_risk_pipeline.py
+        if __name__ == "__main__":
+            main()
+        PY
 
-      - name: 13) Install extra deps for patrol
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        run: |
-          python -m pip install -U requests tzdata
+        python _rebuild_neighbors.py
+        rm -f _rebuild_neighbors.py
+        rm -f "${CRIME_DATA_DIR}/.rebuild_neighbors"
+      fi
+    fi
 
-      - name: 14) Produce yarin.csv & week.csv (Visual Crossing)
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        env:
-          VISUAL_CROSSING_API_KEY: ${{ secrets.VISUAL_CROSSING_API_KEY }}
-          WX_LOCATION: ${{ env.WX_LOCATION }}
-          WX_UNIT: ${{ env.WX_UNIT }}
-          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
-        run: |
-          set -e
-          python - <<'PY'
-          import os, requests, pandas as pd
-          from datetime import datetime, timedelta
-          from zoneinfo import ZoneInfo
+    DEST="${CRIME_DATA_DIR}/neighbors.csv"
+    echo "neighbors.csv (ilk 10 satır):"
+    head -n 10 "${DEST}" || true
 
-          API_KEY = os.environ["VISUAL_CROSSING_API_KEY"]
-          LOCATION = os.environ.get("WX_LOCATION","san francisco")
-          UNIT = os.environ.get("WX_UNIT","us")
-          OUTDIR = os.environ.get("CRIME_DATA_DIR","crime_data")
+- name: "11) Install ML deps for stacking"
+  if: ${{ steps.gate.outputs.proceed == 'true' }}
+  run: |
+    python -m pip install -U pip wheel setuptools
+    pip install pandas numpy scikit-learn joblib
+    pip install xgboost lightgbm || true
 
-          url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{LOCATION}?unitGroup={UNIT}&key={API_KEY}&contentType=json"
-          r = requests.get(url, timeout=30); r.raise_for_status()
-          data = r.json()
+- name: "12) Run stacking risk pipeline"
+  if: ${{ steps.gate.outputs.proceed == 'true' }}
+  env:
+    STACKING_DATASET: ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
+    ENABLE_SPATIAL_TE: "1"
+    TE_ALPHA: "50"
+    NEIGHBOR_FILE: ${{ env.CRIME_DATA_DIR }}/neighbors.csv
+    ENABLE_TE_ABLATION: "1"
+    ABLASYON_BASIS: "ohe"
+  run: |
+    set -e
+    if [ ! -f "${STACKING_DATASET}" ]; then
+      echo "❌ STACKING_DATASET bulunamadı: ${STACKING_DATASET}"
+      exit 2
+    fi
+    python -u stacking_risk_pipeline.py
 
-          SF = ZoneInfo("America/Los_Angeles")
-          today = datetime.now(SF).date()
-          tomorrow = today + timedelta(days=1)
-          week_end = tomorrow + timedelta(days=6)
+- name: "13) Install extra deps for patrol"
+  if: ${{ steps.gate.outputs.proceed == 'true' }}
+  run: |
+    python -m pip install -U requests tzdata
 
-          def rowpick(d):
-              return {
-                  "date": d.get("datetime"),
-                  "tempmax": d.get("tempmax"),
-                  "tempmin": d.get("tempmin"),
-                  "precip": d.get("precip", 0),
-                  "precipprob": d.get("precipprob"),
-                  "windspeed": d.get("windspeed"),
-                  "humidity": d.get("humidity"),
-                  "description": d.get("description"),
-                  "icon": d.get("icon"),
-                  "unit_group": UNIT,
-              }
+- name: "14) Produce yarin.csv & week.csv (Visual Crossing)"
+  if: ${{ steps.gate.outputs.proceed == 'true' }}
+  env:
+    VISUAL_CROSSING_API_KEY: ${{ secrets.VISUAL_CROSSING_API_KEY }}
+    WX_LOCATION: ${{ env.WX_LOCATION }}
+    WX_UNIT: ${{ env.WX_UNIT }}
+    CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
+  run: |
+    set -e
+    python - <<-'PY'
+    import os, requests, pandas as pd
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
 
-          days = data.get("days", [])
+    API_KEY = os.environ["VISUAL_CROSSING_API_KEY"]
+    LOCATION = os.environ.get("WX_LOCATION","san francisco")
+    UNIT = os.environ.get("WX_UNIT","us")
+    OUTDIR = os.environ.get("CRIME_DATA_DIR","crime_data")
 
-          # yarin.csv
-          t_key = tomorrow.strftime("%Y-%m-%d")
-          td = next((d for d in days if d.get("datetime") == t_key), None)
-          df_t = pd.DataFrame([rowpick(td)]) if td else pd.DataFrame([{"date": t_key, "unit_group": UNIT}])
-          os.makedirs(OUTDIR, exist_ok=True)
-          df_t.to_csv(os.path.join(OUTDIR, "yarin.csv"), index=False)
+    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{LOCATION}?unitGroup={UNIT}&key={API_KEY}&contentType=json"
+    r = requests.get(url, timeout=30); r.raise_for_status()
+    data = r.json()
 
-          # week.csv (yarından başlayarak 7 gün)
-          rows = []
-          for d in days:
-              try:
-                  dd = datetime.strptime(d.get("datetime",""), "%Y-%m-%d").date()
-              except Exception:
-                  continue
-              if tomorrow <= dd <= week_end:
-                  rows.append(rowpick(d))
-          pd.DataFrame(rows).to_csv(os.path.join(OUTDIR, "week.csv"), index=False)
-          PY
-          echo "---- yarin.csv (head) ----"; head -n 5 "${CRIME_DATA_DIR}/yarin.csv" || true
-          echo "---- week.csv (head) ----";  head -n 5 "${CRIME_DATA_DIR}/week.csv" || true
+    SF = ZoneInfo("America/Los_Angeles")
+    today = datetime.now(SF).date()
+    tomorrow = today + timedelta(days=1)
+    week_end = tomorrow + timedelta(days=6)
 
-      - name: 15) Run post_patrol.py (uses risk_hourly + yarin/week)
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        env:
-          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
-          PATROL_TOP_K:   ${{ env.PATROL_TOP_K }}
-          PATROL_HORIZON_DAYS: ${{ env.PATROL_HORIZON_DAYS }}
-        run: |
-          set -e
-          test -f "${CRIME_DATA_DIR}/risk_hourly.csv" || { echo "❌ risk_hourly.csv bulunamadı (stacking çıktılarını kontrol et)"; exit 2; }
-          python -u scripts/post_patrol.py
-          echo "---- patrol_recs_multi.csv (head) ----"
-          head -n 20 "${CRIME_DATA_DIR}/patrol_recs_multi.csv" || true
+    def rowpick(d):
+        return {
+            "date": d.get("datetime"),
+            "tempmax": d.get("tempmax"),
+            "tempmin": d.get("tempmin"),
+            "precip": d.get("precip", 0),
+            "precipprob": d.get("precipprob"),
+            "windspeed": d.get("windspeed"),
+            "humidity": d.get("humidity"),
+            "description": d.get("description"),
+            "icon": d.get("icon"),
+            "unit_group": UNIT,
+        }
 
-      - name: 16) Quick preview (stacking outputs)
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        run: |
-          echo "risk_hourly* (ilk 5)"
-          head -n 5 ${CRIME_DATA_DIR}/risk_hourly*.csv 2>/dev/null || true
-          echo "patrol_recs* (ilk 5)"
-          head -n 5 ${CRIME_DATA_DIR}/patrol_recs*.csv 2>/dev/null || true
-          echo "metrics_* (ilk 5)"
-          head -n 5 ${CRIME_DATA_DIR}/metrics_*.csv 2>/dev/null || true
+    days = data.get("days", [])
 
-      # 17) CSV → Parquet için bağımlılıklar
-      - name: Install converter deps
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        run: |
-          python -m pip install -U pip
-          pip install --upgrade polars pyarrow
+    # yarin.csv
+    t_key = tomorrow.strftime("%Y-%m-%d")
+    td = next((d for d in days if d.get("datetime") == t_key), None)
+    df_t = pd.DataFrame([rowpick(td)]) if td else pd.DataFrame([{"date": t_key, "unit_group": UNIT}])
+    os.makedirs(OUTDIR, exist_ok=True)
+    df_t.to_csv(os.path.join(OUTDIR, "yarin.csv"), index=False)
 
-      # CSV → Parquet dönüşümü
-      - name: Convert CSV → Parquet
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        run: |
-          set -e
-          mkdir -p parquet_out
-          python scripts/csv_to_parquet.py \
-            --input "${{ env.CRIME_DATA_DIR }}/" \
-            --output parquet_out/ \
-            --compression zstd \
-            --stats
+    # week.csv (yarından başlayarak 7 gün)
+    rows = []
+    for d in days:
+        try:
+            dd = datetime.strptime(d.get("datetime",""), "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if tomorrow <= dd <= week_end:
+            rows.append(rowpick(d))
+    pd.DataFrame(rows).to_csv(os.path.join(OUTDIR, "week.csv"), index=False)
+    PY
+    echo "---- yarin.csv (head) ----"; head -n 5 "${CRIME_DATA_DIR}/yarin.csv" || true
+    echo "---- week.csv (head) ----";  head -n 5 "${CRIME_DATA_DIR}/week.csv" || true
 
-      # Parquet'leri ayrı artifact olarak yükle
-      - name: Upload Parquet artifact (opsiyonel)
-        if: ${{ steps.gate.outputs.proceed == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'artifact')) }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: sf-crime-parquet
-          path: parquet_out/
-          if-no-files-found: warn
+- name: "15) Run post_patrol.py (uses risk_hourly + yarin/week)"
+  if: ${{ steps.gate.outputs.proceed == 'true' }}
+  env:
+    CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
+    PATROL_TOP_K:   ${{ env.PATROL_TOP_K }}
+    PATROL_HORIZON_DAYS: ${{ env.PATROL_HORIZON_DAYS }}
+  run: |
+    set -e
+    test -f "${CRIME_DATA_DIR}/risk_hourly.csv" || { echo "❌ risk_hourly.csv bulunamadı (stacking çıktılarını kontrol et)"; exit 2; }
+    python -u scripts/post_patrol.py
+    echo "---- patrol_recs_multi.csv (head) ----"
+    head -n 20 "${CRIME_DATA_DIR}/patrol_recs_multi.csv" || true
 
-      # ---- ÇIKTILAR ----
-      - name: Upload artifact (varsayılan)
-        if: ${{ steps.gate.outputs.proceed == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'artifact')) }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: sf-crime-pipeline-output
-          path: |
-            ${{ env.CRIME_DATA_DIR }}/sf_crime.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_y.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_08_static.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_population.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_09.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_08.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_07.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_06.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_05.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_04.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_03.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_02.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_01.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_311_last_5_years*.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_311_last_5_years_y.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_911_last_5_year.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_911_last_5_year_y.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_bus_stops_with_geoid.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_train_stops_with_geoid.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_pois_cleaned_with_geoid.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_weather_5years.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_weather_5years_y.csv
-            ${{ env.CRIME_DATA_DIR }}/*.geojson
-            ${{ env.CRIME_DATA_DIR }}/risk_hourly*.csv
-            ${{ env.CRIME_DATA_DIR }}/patrol_recs*.csv
-            ${{ env.CRIME_DATA_DIR }}/metrics_*.csv
-            ${{ env.CRIME_DATA_DIR }}/models/*.joblib
-            ${{ env.CRIME_DATA_DIR }}/ablation_spatial_te.csv
-            ${{ env.CRIME_DATA_DIR }}/oof_base_probs*.npz
-            ${{ env.CRIME_DATA_DIR }}/yarin.csv
-            ${{ env.CRIME_DATA_DIR }}/week.csv
-          if-no-files-found: warn
-          retention-days: 14
+- name: "16) Quick preview (stacking outputs)"
+  if: ${{ steps.gate.outputs.proceed == 'true' }}
+  run: |
+    echo "risk_hourly* (ilk 5)"
+    head -n 5 ${CRIME_DATA_DIR}/risk_hourly*.csv 2>/dev/null || true
+    echo "patrol_recs* (ilk 5)"
+    head -n 5 ${CRIME_DATA_DIR}/patrol_recs*.csv 2>/dev/null || true
+    echo "metrics_* (ilk 5)"
+    head -n 5 ${CRIME_DATA_DIR}/metrics_*.csv 2>/dev/null || true
 
-      - name: Commit & push (opsiyonel)
-        if: ${{ steps.gate.outputs.proceed == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'commit' }}
-        run: |
-          set -e
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "🔄 Full pipeline + stacking outputs [skip ci]" || echo "No changes"
-          git push || echo "Nothing to push"
+# 17) CSV → Parquet için bağımlılıklar
+- name: "Install converter deps"
+  if: ${{ steps.gate.outputs.proceed == 'true' }}
+  run: |
+    python -m pip install -U pip
+    pip install --upgrade polars pyarrow
 
-      # --- SENDGRID HTTP: Başarı bildirimi ---
-      - name: Notify success (SendGrid HTTP)
-        if: ${{ steps.gate.outputs.proceed == 'true' && success() }}
-        env:
-          SG_KEY: ${{ secrets.SENDGRID_API_KEY }}
-        run: |
-          if [ -z "$SG_KEY" ]; then echo "❌ SENDGRID_API_KEY yok/boş"; exit 1; fi
-          curl -s -X POST https://api.sendgrid.com/v3/mail/send \
-            -H "Authorization: Bearer $SG_KEY" \
-            -H "Content-Type: application/json" \
-            -d @- <<'EOF' -o /dev/stderr -w "\nHTTP:%{http_code}\n"
-          {
-            "personalizations":[ {"to":[ {"email":"cem5113@hotmail.com"}, {"email":"cemeroglu5113@gmail.com"} ]} ],
-            "from":{"email":"${{ secrets.SG_FROM }}","name":"SF Crime Pipeline"},
-            "reply_to":{"email":"cem5113@hotmail.com","name":"Cem"},
-            "subject":"✅ SF Crime Pipeline + Stacking başarı (#${{ github.run_number }})",
-            "categories":["sf-crime-pipeline","success"],
-            "content":[{"type":"text/html","value":"<p>Pipeline başarıyla tamamlandı.</p><ul><li>Run #: <b>${{ github.run_number }}</b></li><li>Run ID: <b>${{ github.run_id }}</b></li><li>Ref: <code>${{ github.ref }}</code></li><li>Runner local time (SF): <code>${{ env.RUN_LOCAL_TIME }}</code></li></ul><p>Çıktılar artifact olarak kaydedildi: <b>sf-crime-pipeline-output</b></p><p>Stacking dahil: <code>risk_hourly*</code>, <code>patrol_recs*</code>, <code>metrics_*</code>, <code>models/*.joblib</code></p><p><a href='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'>Log ve detaylar</a></p>"}]
-          }
-          EOF
+# CSV → Parquet dönüşümü
+- name: "Convert CSV → Parquet"
+  if: ${{ steps.gate.outputs.proceed == 'true' }}
+  run: |
+    set -e
+    mkdir -p parquet_out
+    python scripts/csv_to_parquet.py \
+      --input "${{ env.CRIME_DATA_DIR }}/" \
+      --output parquet_out/ \
+      --compression zstd \
+      --stats
 
-      # --- SENDGRID HTTP: Hata bildirimi ---
-      - name: Notify failure (SendGrid HTTP)
-        if: ${{ steps.gate.outputs.proceed == 'true' && failure() }}
-        env:
-          SG_KEY: ${{ secrets.SENDGRID_API_KEY }}
-        run: |
-          if [ -z "$SG_KEY" ]; then echo "❌ SENDGRID_API_KEY yok/boş"; exit 1; fi
-          curl -s -X POST https://api.sendgrid.com/v3/mail/send \
-            -H "Authorization: Bearer $SG_KEY" \
-            -H "Content-Type: application/json" \
-            -d @- <<'EOF' -o /dev/stderr -w "\nHTTP:%{http_code}\n"
-          {
-            "personalizations":[ {"to":[ {"email":"cem5113@hotmail.com"}, {"email":"cemeroglu5113@gmail.com"} ]} ],
-            "from":{"email":"${{ secrets.SG_FROM }}","name":"SF Crime Pipeline"},
-            "reply_to":{"email":"cem5113@hotmail.com","name":"Cem"},
-            "subject":"❌ SF Crime Pipeline + Stacking başarısız (#${{ github.run_number }})",
-            "categories":["sf-crime-pipeline","failure"],
-            "content":[{"type":"text/html","value":"<p>Pipeline başarısız oldu.</p><ul><li>Run #: <b>${{ github.run_number }}</b></li><li>Run ID: <b>${{ github.run_id }}</b></li><li>Ref: <code>${{ github.ref }}</code></li><li>Runner local time (SF): <code>${{ env.RUN_LOCAL_TIME }}</code></li></ul><p><a href='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'>Log ve detaylar</a></p>"}]
-          }
-          EOF
+# Parquet'leri ayrı artifact olarak yükle
+- name: "Upload Parquet artifact (opsiyonel)"
+  if: ${{ steps.gate.outputs.proceed == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'artifact')) }}
+  uses: actions/upload-artifact@v4
+  with:
+    name: sf-crime-parquet
+    path: parquet_out/
+    if-no-files-found: warn
 
-      - name: Write run summary
-        if: ${{ steps.gate.outputs.proceed == 'true' && success() }}
-        run: |
-          {
-            echo "## SF Crime Pipeline (Stacking dahil)"
-            echo ""
-            echo "- Çalışma zamanı (SF): **$(date)**"
-            echo "- Çıktılar: \`sf_crime_01..09.csv\`, 911/311 özetleri, geojson"
-            echo "- Stacking: \`risk_hourly*\`, \`patrol_recs*\`, \`metrics_*\`, \`models/*.joblib\`"
-            echo "- Artifact adı: **sf-crime-pipeline-output**"
-            echo "- PATROL_TOP_K: **${PATROL_TOP_K}**"
-          } >> $GITHUB_STEP_SUMMARY
+# ---- ÇIKTILAR ----
+- name: "Upload artifact (varsayılan)"
+  if: ${{ steps.gate.outputs.proceed == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'artifact')) }}
+  uses: actions/upload-artifact@v4
+  with:
+    name: sf-crime-pipeline-output
+    path: |
+      ${{ env.CRIME_DATA_DIR }}/sf_crime.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_crime_y.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_crime_08_static.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_population.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_crime_09.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_crime_08.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_crime_07.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_crime_06.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_crime_05.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_crime_04.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_crime_03.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_crime_02.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_crime_01.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_311_last_5_years*.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_311_last_5_years_y.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_911_last_5_year.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_911_last_5_year_y.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_bus_stops_with_geoid.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_train_stops_with_geoid.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_pois_cleaned_with_geoid.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_weather_5years.csv
+      ${{ env.CRIME_DATA_DIR }}/sf_weather_5years_y.csv
+      ${{ env.CRIME_DATA_DIR }}/*.geojson
+      ${{ env.CRIME_DATA_DIR }}/risk_hourly*.csv
+      ${{ env.CRIME_DATA_DIR }}/patrol_recs*.csv
+      ${{ env.CRIME_DATA_DIR }}/metrics_*.csv
+      ${{ env.CRIME_DATA_DIR }}/models/*.joblib
+      ${{ env.CRIME_DATA_DIR }}/ablation_spatial_te.csv
+      ${{ env.CRIME_DATA_DIR }}/oof_base_probs*.npz
+      ${{ env.CRIME_DATA_DIR }}/yarin.csv
+      ${{ env.CRIME_DATA_DIR }}/week.csv
+    if-no-files-found: warn
+    retention-days: 14
+
+- name: "Commit & push (opsiyonel)"
+  if: ${{ steps.gate.outputs.proceed == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'commit' }}
+  run: |
+    set -e
+    git config --global user.name "github-actions[bot]"
+    git config --global user.email "github-actions[bot]@users.noreply.github.com"
+    git add -A
+    git commit -m "🔄 Full pipeline + stacking outputs [skip ci]" || echo "No changes"
+    git push || echo "Nothing to push"
+
+# --- SENDGRID HTTP: Başarı bildirimi ---
+- name: "Notify success (SendGrid HTTP)"
+  if: ${{ steps.gate.outputs.proceed == 'true' && success() }}
+  env:
+    SG_KEY: ${{ secrets.SENDGRID_API_KEY }}
+  run: |
+    if [ -z "$SG_KEY" ]; then echo "❌ SENDGRID_API_KEY yok/boş"; exit 1; fi
+    curl -s -X POST https://api.sendgrid.com/v3/mail/send \
+      -H "Authorization: Bearer $SG_KEY" \
+      -H "Content-Type: application/json" \
+      -d @- <<-'EOF' -o /dev/stderr -w "\nHTTP:%{http_code}\n"
+    {
+      "personalizations":[ {"to":[ {"email":"cem5113@hotmail.com"}, {"email":"cemeroglu5113@gmail.com"} ]} ],
+      "from":{"email":"${{ secrets.SG_FROM }}","name":"SF Crime Pipeline"},
+      "reply_to":{"email":"cem5113@hotmail.com","name":"Cem"},
+      "subject":"✅ SF Crime Pipeline + Stacking başarı (#${{ github.run_number }})",
+      "categories":["sf-crime-pipeline","success"],
+      "content":[{"type":"text/html","value":"<p>Pipeline başarıyla tamamlandı.</p><ul><li>Run #: <b>${{ github.run_number }}</b></li><li>Run ID: <b>${{ github.run_id }}</b></li><li>Ref: <code>${{ github.ref }}</code></li><li>Runner local time (SF): <code>${{ env.RUN_LOCAL_TIME }}</code></li></ul><p>Çıktılar artifact olarak kaydedildi: <b>sf-crime-pipeline-output</b></p><p>Stacking dahil: <code>risk_hourly*</code>, <code>patrol_recs*</code>, <code>metrics_*</code>, <code>models/*.joblib</code></p><p><a href='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'>Log ve detaylar</a></p>"}]
+    }
+    EOF
+
+# --- SENDGRID HTTP: Hata bildirimi ---
+- name: "Notify failure (SendGrid HTTP)"
+  if: ${{ steps.gate.outputs.proceed == 'true' && failure() }}
+  env:
+    SG_KEY: ${{ secrets.SENDGRID_API_KEY }}
+  run: |
+    if [ -z "$SG_KEY" ]; then echo "❌ SENDGRID_API_KEY yok/boş"; exit 1; fi
+    curl -s -X POST https://api.sendgrid.com/v3/mail/send \
+      -H "Authorization: Bearer $SG_KEY" \
+      -H "Content-Type: application/json" \
+      -d @- <<-'EOF' -o /dev/stderr -w "\nHTTP:%{http_code}\n"
+    {
+      "personalizations":[ {"to":[ {"email":"cem5113@hotmail.com"}, {"email":"cemeroglu5113@gmail.com"} ]} ],
+      "from":{"email":"${{ secrets.SG_FROM }}","name":"SF Crime Pipeline"},
+      "reply_to":{"email":"cem5113@hotmail.com","name":"Cem"},
+      "subject":"❌ SF Crime Pipeline + Stacking başarısız (#${{ github.run_number }})",
+      "categories":["sf-crime-pipeline","failure"],
+      "content":[{"type":"text/html","value":"<p>Pipeline başarısız oldu.</p><ul><li>Run #: <b>${{ github.run_number }}</b></li><li>Run ID: <b>${{ github.run_id }}</b></li><li>Ref: <code>${{ github.ref }}</code></li><li>Runner local time (SF): <code>${{ env.RUN_LOCAL_TIME }}</code></li></ul><p><a href='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'>Log ve detaylar</a></p>"}]
+    }
+    EOF
+
+- name: "Write run summary"
+  if: ${{ steps.gate.outputs.proceed == 'true' && success() }}
+  run: |
+    {
+      echo "## SF Crime Pipeline (Stacking dahil)"
+      echo ""
+      echo "- Çalışma zamanı (SF): **$(date)**"
+      echo "- Çıktılar: \`sf_crime_01..09.csv\`, 911/311 özetleri, geojson"
+      echo "- Stacking: \`risk_hourly*\`, \`patrol_recs*\`, \`metrics_*\`, \`models/*.joblib\`"
+      echo "- Artifact adı: **sf-crime-pipeline-output**"
+      echo "- PATROL_TOP_K: **${PATROL_TOP_K}**"
+    } >> $GITHUB_STEP_SUMMARY
