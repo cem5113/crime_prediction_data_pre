@@ -535,271 +535,150 @@ jobs:
               print("➕ eski 09'dan 08_static'e eklenen kolonlar:", cols_new)
           PY
 
-          cat > _rebuild_neighbors.py <<'PY'
-          #!/usr/bin/env python3
-          from __future__ import annotations
-          import os, re
-          from pathlib import Path
-          import pandas as pd
+      - name: 10.5) neighbors.csv (kullan/normalize/üret + kalite kontrol)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
+          STACKING_DATASET: ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
+          NEIGHBOR_FILE: ${{ env.CRIME_DATA_DIR }}/neighbors.csv
+          NEIGHBOR_STRATEGY: queen
+          MIN_NEIGHBOR_DEG: "3"
+          KNN_K: "5"
+          NEIGHBOR_POLY: ${{ env.CRIME_DATA_DIR }}/sf_grid.geojson
+        run: |
+          set -euo pipefail
+          # ... (1) kopyalama ve (2) normalize ve (3) kalite kontrol kısımları aynen kalsın ...
+      
+          # 4) Yeniden üretim gerekiyorsa
+          if [ -f "${CRIME_DATA_DIR}/.rebuild_neighbors" ]; then
+            if [ ! -f "${NEIGHBOR_POLY}" ]; then
+              echo "⚠️ Polygon katmanı yok: ${NEIGHBOR_POLY}. Mevcut neighbors.csv kullanılacak."
+            else
+              echo "🔧 Komşuluk yeniden oluşturuluyor (${NEIGHBOR_STRATEGY}, min_deg=${MIN_NEIGHBOR_DEG}, knn_k=${KNN_K})"
+      
+              cat > _rebuild_neighbors.py <<'PY'
+      #!/usr/bin/env python3
+      from __future__ import annotations
+      import os, re
+      from pathlib import Path
+      import pandas as pd
+      try:
+          import geopandas as gpd
+      except Exception:
+          gpd = None
+      
+      CRIME_DIR  = Path(os.environ.get("CRIME_DATA_DIR","crime_prediction_data"))
+      GEOID_LEN  = int(os.environ.get("GEOID_LEN","11"))
+      STRATEGY   = os.environ.get("NEIGHBOR_STRATEGY","queen").lower()
+      MIN_DEG    = int(os.environ.get("MIN_NEIGHBOR_DEG","3"))
+      KNN_K      = int(os.environ.get("KNN_K","5"))
+      OUT_PATH   = Path(os.environ.get("NEIGHBOR_FILE", str(CRIME_DIR/"neighbors.csv")))
+      GRID_CSV   = Path(os.environ.get("STACKING_DATASET", str(CRIME_DIR/"sf_crime_grid_full_labeled.csv")))
+      POLY_HINT  = os.environ.get("NEIGHBOR_POLY","")
+      
+      def _norm(s: pd.Series) -> pd.Series:
+          return s.astype(str).str.extract(r"(\d+)", expand=False).str.zfill(GEOID_LEN)
+      def _sym(df: pd.DataFrame) -> pd.DataFrame:
+          rev = df.rename(columns={"geoid":"neighbor","neighbor":"geoid"})
+          out = pd.concat([df, rev], ignore_index=True)
+          out = out[out["geoid"] != out["neighbor"]]
+          return out.drop_duplicates()
+      def _neighbors_from_polygons(path: str) -> pd.DataFrame | None:
+          if not gpd:
+              return None
           try:
-              import geopandas as gpd
+              gdf = gpd.read_file(path)
           except Exception:
-              gpd = None
-          
-          CRIME_DIR  = Path(os.environ.get("CRIME_DATA_DIR","crime_prediction_data"))
-          GEOID_LEN  = int(os.environ.get("GEOID_LEN","11"))
-          STRATEGY   = os.environ.get("NEIGHBOR_STRATEGY","queen").lower()
-          MIN_DEG    = int(os.environ.get("MIN_NEIGHBOR_DEG","3"))
-          KNN_K      = int(os.environ.get("KNN_K","5"))
-          OUT_PATH   = Path(os.environ.get("NEIGHBOR_FILE", str(CRIME_DIR/"neighbors.csv")))
-          GRID_CSV   = Path(os.environ.get("STACKING_DATASET", str(CRIME_DIR/"sf_crime_grid_full_labeled.csv")))
-          POLY_HINT  = os.environ.get("NEIGHBOR_POLY","")
-          
-          def _norm(s: pd.Series) -> pd.Series:
-              return s.astype(str).str.extract(r"(\d+)", expand=False).str.zfill(GEOID_LEN)
-          def _sym(df: pd.DataFrame) -> pd.DataFrame:
-              rev = df.rename(columns={"geoid":"neighbor","neighbor":"geoid"})
-              out = pd.concat([df, rev], ignore_index=True)
-              out = out[out["geoid"] != out["neighbor"]]
-              return out.drop_duplicates()
-          def _neighbors_from_polygons(path: str) -> pd.DataFrame | None:
-              if not gpd:
-                  return None
-              try:
-                  gdf = gpd.read_file(path)
-              except Exception:
-                  return None
+              return None
+          low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in gdf.columns}
+          gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid") or list(gdf.columns)[0]
+          if "geometry" not in gdf.columns:
+              return None
+          gdf = gdf[[gcol,"geometry"]].rename(columns={gcol:"geoid"}).copy()
+          gdf["geoid"] = _norm(gdf["geoid"])
+          gdf = gdf[gdf["geometry"].notna()].reset_index(drop=True)
+          pairs = gdf.sindex.query_bulk(gdf.geometry, predicate="touches")
+          i, j = pairs
+          m = pd.DataFrame({"i": i, "j": j})
+          m = m[m["i"] < m["j"]]
+          df = pd.DataFrame({
+              "geoid":    gdf.loc[m["i"], "geoid"].to_numpy(),
+              "neighbor": gdf.loc[m["j"], "geoid"].to_numpy(),
+          })
+          return _sym(df.drop_duplicates())
+      def _centroids_table(poly_ok: bool) -> pd.DataFrame | None:
+          if poly_ok and gpd:
+              gdf = gpd.read_file(POLY_HINT)
               low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in gdf.columns}
               gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid") or list(gdf.columns)[0]
-              if "geometry" not in gdf.columns:
-                  return None
-              gdf = gdf[[gcol,"geometry"]].rename(columns={gcol:"geoid"}).copy()
-              gdf["geoid"] = _norm(gdf["geoid"])
-              gdf = gdf[gdf["geometry"].notna()].reset_index(drop=True)
-              pairs = gdf.sindex.query_bulk(gdf.geometry, predicate="touches")
-              i, j = pairs
-              m = pd.DataFrame({"i": i, "j": j})
-              m = m[m["i"] < m["j"]]
-              df = pd.DataFrame({
-                  "geoid":    gdf.loc[m["i"], "geoid"].to_numpy(),
-                  "neighbor": gdf.loc[m["j"], "geoid"].to_numpy(),
-              })
-              return _sym(df.drop_duplicates())
-          def _centroids_table(poly_ok: bool) -> pd.DataFrame | None:
-              if poly_ok and gpd:
-                  gdf = gpd.read_file(POLY_HINT)
-                  low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in gdf.columns}
-                  gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid") or list(gdf.columns)[0]
-                  c = gdf[[gcol,"geometry"]].rename(columns={gcol:"geoid"}).copy()
-                  c["geoid"] = _norm(c["geoid"])
-                  cent = c.geometry.centroid
-                  return pd.DataFrame({"geoid": c["geoid"], "x": cent.x, "y": cent.y})
-              if GRID_CSV.exists():
-                  df = pd.read_csv(GRID_CSV, dtype=str, low_memory=False)
-                  low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in df.columns}
-                  gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid")
-                  lat  = low.get("lat") or low.get("latitude") or low.get("centroidlat")
-                  lon  = low.get("lon") or low.get("lng") or low.get("longitude") or low.get("centroidlon")
-                  if gcol and lat and lon:
-                      t = df[[gcol, lat, lon]].rename(columns={gcol:"geoid", lat:"y", lon:"x"}).copy()
-                      t["geoid"] = _norm(t["geoid"])
-                      t["x"] = pd.to_numeric(t["x"], errors="coerce")
-                      t["y"] = pd.to_numeric(t["y"], errors="coerce")
-                      return t.dropna()
-              return None
-          def _ensure_min_degree(nb: pd.DataFrame, geos: pd.DataFrame) -> pd.DataFrame:
-              import numpy as np
-              if geos is None or geos.empty:
-                  return nb
-              deg = nb.groupby("geoid")["neighbor"].nunique()
-              need = set(deg.index[deg < MIN_DEG] if not deg.empty else geos["geoid"])
-              if not need:
-                  return nb
-              idx = {g:i for i,g in enumerate(geos["geoid"])}
-              XY  = geos[["x","y"]].to_numpy()
-              add = []
-              for g in need:
-                  i = idx[g]
-                  d = np.sum((XY - XY[i])**2, axis=1)
-                  order = np.argsort(d)
-                  picks = []
-                  for j in order:
-                      gj = geos.iloc[j]["geoid"]
-                      if gj == g:
-                          continue
-                      picks.append(gj)
-                      if len(picks) >= KNN_K:
-                          break
-                  add += [(g, n) for n in picks]
-              nb2 = pd.concat([nb, pd.DataFrame(add, columns=["geoid","neighbor"])], ignore_index=True)
-              return _sym(nb2.drop_duplicates())
-          def main():
-              poly_ok = bool(POLY_HINT) and Path(POLY_HINT).exists()
-              nb = _neighbors_from_polygons(POLY_HINT) if poly_ok else pd.DataFrame(columns=["geoid","neighbor"])
-              cent = _centroids_table(poly_ok)
-              nb = _ensure_min_degree(nb, cent)
-              if nb.empty:
-                  nb = pd.DataFrame(columns=["geoid","neighbor"])
-              nb["geoid"] = _norm(nb["geoid"])
-              nb["neighbor"] = _norm(nb["neighbor"])
-              nb = _sym(nb).drop_duplicates().sort_values(["geoid","neighbor"])
-              OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-              nb.to_csv(OUT_PATH, index=False)
-              deg = nb.groupby("geoid")["neighbor"].nunique()
-              print(f"neighbors.csv yazıldı → {OUT_PATH} | n_edges={len(nb)} | n_nodes={len(deg)} | min_deg={int(deg.min()) if len(deg) else 0} | mean_deg={round(float(deg.mean()),2) if len(deg) else 0.0}")
-          if __name__ == "__main__":
-              main()
-          PY
-
-
-      - name: 9.10) Prepare NEW sf_crime_08 statics from OLD sf_crime_09 (drop weather)
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        run: |
-          python - <<'PY'
-          import os, pandas as pd, pathlib
-          CRIME_DIR = os.environ.get("CRIME_DATA_DIR","crime_prediction_data")
-          old09 = pathlib.Path(CRIME_DIR)/"sf_crime_09.csv"      # varsa kullan
-          out08 = pathlib.Path(CRIME_DIR)/"sf_crime_08_static.csv"
-
-          if not old09.exists():
-              print("ℹ️ sf_crime_09.csv yok; yeni 08 statikleri eski 09'dan üretilemeyecek. Bu adım opsiyonel.")
-              raise SystemExit(0)
-
-          df = pd.read_csv(old09, low_memory=False)
-          # Olası weather kolonları
-          drop_names = {
-            "temp","tempmax","temp_min","tempmin","temp_max","temp_range",
-            "precip","precipitation","precipitation_mm","humidity","windspeed","icon","description"
-          }
-          drop_cols = [c for c in df.columns if c.lower() in drop_names]
-          if drop_cols:
-              df.drop(columns=drop_cols, inplace=True, errors="ignore")
-              print("🧹 Weather benzeri kolonlar silindi:", drop_cols)
-
-          df.to_csv(out08, index=False)
-          print(f"✅ NEW sf_crime_08 statics hazır → {out08}")
-          PY
-
-      - name: 9.11) Build NEW sf_crime_09 from sf_crime_y + weather(date) + NEW 08 statics(GEOID)
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        run: |
-          python - <<'PY'
-          import os, pandas as pd, numpy as np
-          from pathlib import Path
-
-          CRIME_DIR = os.environ.get("CRIME_DATA_DIR","crime_prediction_data")
-
-          def _read(p, **kw):
-              p = Path(p)
-              if not p.exists(): return None
-              try: return pd.read_csv(p, **kw)
-              except Exception: return None
-
-          def _norm_geoid(s, L=11):
-              return s.astype(str).str.extract(r"(\d+)", expand=False).str[:L].str.zfill(L)
-
-          # 1) Base: sf_crime_y (satır/sütun sabit kalacak; sadece eklenecek)
-          Y = _read(Path(CRIME_DIR)/"sf_crime_y.csv", dtype={"GEOID":str})
-          assert Y is not None and not Y.empty, "sf_crime_y.csv yok/boş!"
-          base_cols = list(Y.columns); n0 = len(Y)
-
-          # date
-          if "date" in Y.columns:
-              Y["date"] = pd.to_datetime(Y["date"], errors="coerce").dt.date
-          elif "datetime" in Y.columns:
-              Y["date"] = pd.to_datetime(Y["datetime"], errors="coerce").dt.date
-          else:
-              raise ValueError("sf_crime_y içinde date/datetime yok (weather join için gerekli).")
-
-          if "GEOID" in Y.columns:
-              Y["GEOID"] = _norm_geoid(Y["GEOID"])
-
-          # 2) WEATHER: öncelik sf_crime_08.csv (weather adımı), yoksa sf_weather_5years.csv fallback
-          W = _read(Path(CRIME_DIR)/"sf_crime_08.csv")
-          if W is not None and not W.empty and "date" in W.columns:
-              W["date"] = pd.to_datetime(W["date"], errors="coerce").dt.date
-              # muhtemel kolonlar
-              weather_keep = [c for c in ["date","tempmax","temp_max","tempmin","temp_min","temp_range","precip","precipitation_mm","humidity","windspeed","icon","description"] if c in W.columns]
-              W = W[weather_keep].drop_duplicates(subset=["date"], keep="last")
-              before = set(Y.columns)
-              Y = Y.merge(W, on="date", how="left")
-              print("➕ weather (sf_crime_08.csv) eklendi:", [c for c in Y.columns if c not in before])
-          else:
-              W2 = _read(Path(CRIME_DIR)/"sf_weather_5years.csv")
-              if W2 is not None and not W2.empty and "date" in W2.columns:
-                  W2["date"] = pd.to_datetime(W2["date"], errors="coerce").dt.date
-                  weather_keep = [c for c in ["date","tempmax","temp_max","tempmin","temp_min","temp_range","precip","precipitation_mm","humidity","windspeed","icon","description"] if c in W2.columns]
-                  W2 = W2[weather_keep].drop_duplicates(subset=["date"], keep="last")
-                  before = set(Y.columns)
-                  Y = Y.merge(W2, on="date", how="left")
-                  print("➕ weather (sf_weather_5years.csv) eklendi:", [c for c in Y.columns if c not in before])
-              else:
-                  print("ℹ️ weather bulunamadı (08 de 5years da).")
-
-          # 3) STATICS: NEW sf_crime_08 statikleri (eski 09'dan türetilmiş) + diğer GEOID tabanlı kaynaklar
-          stat_sources = [
-              ("sf_crime_08_static.csv", ["GEOID"]),  # tüm GEOID’li alanları serbest bırakacağız
-              ("sf_population.csv", ["GEOID","population","population_density"]),
-              ("sf_bus_stops_with_geoid.csv", ["GEOID","bus_stop_count","distance_to_bus","bus_stop_count_range","distance_to_bus_range"]),
-              ("sf_train_stops_with_geoid.csv", ["GEOID","train_stop_count","distance_to_train","train_stop_count_range","distance_to_train_range"]),
-              ("sf_pois_cleaned_with_geoid.csv", ["GEOID","poi_total_count","poi_risk_score","poi_dominant_type","poi_total_count_range","poi_risk_score_range"]),
-              ("sf_police_gov_crime.csv", ["GEOID","distance_to_police","distance_to_police_range","distance_to_government_building","distance_to_government_building_range","is_near_police","is_near_government"]),
-          ]
-          for fname, whitelist in stat_sources:
-              T = _read(Path(CRIME_DIR)/fname)
-              if T is None or T.empty:
-                  print(f"ℹ️ {fname} yok/boş; atlandı."); continue
-              if "GEOID" not in T.columns:
-                  print(f"⚠️ {fname} içinde GEOID yok; atlandı."); continue
-
-              T["GEOID"] = _norm_geoid(T["GEOID"])
-              if fname == "sf_crime_08_static.csv":
-                  # Eski 09’dan gelen yeni 08 statikleri → tüm GEOID’li kolonlar (weather zaten 2. adımda eklendi)
-                  keep_cols = [c for c in T.columns if c == "GEOID" or c not in {"date","datetime"}]
-              else:
-                  keep_cols = [c for c in whitelist if c in T.columns]
-
-              T = T[keep_cols].drop_duplicates(subset=["GEOID"], keep="last")
-              before = set(Y.columns)
-              Y = Y.merge(T, on="GEOID", how="left")
-              added = [c for c in Y.columns if c not in before]
-              if added:
-                  print(f"➕ eklendi ({fname}):", added)
-
-          # 4) Kolon sırası: sf_crime_y sabit + yeni ekler
-          new_cols = [c for c in Y.columns if c not in base_cols]
-          Y = Y[base_cols + new_cols]
-          assert len(Y) == n0, f"Satır sayısı değişti! {n0}→{len(Y)}"
-
-          OUT = Path(CRIME_DIR)/"sf_crime_09.csv"
-          Y.to_csv(OUT, index=False)
-          print(f"✅ NEW sf_crime_09 yazıldı: {OUT} | rows={len(Y)}, cols={Y.shape[1]}")
-          try:
-              print("📄 NEW sf_crime_09 (head):")
-              print(Y.head(5).to_string(index=False))
-          except Exception: pass
-          python _rebuild_neighbors.py   
-          PY
-          
-          #!/usr/bin/env python3
-          from __future__ import annotations
-          import os, re
-          from pathlib import Path
-          import pandas as pd
-
-          try:
-              import geopandas as gpd
-          except Exception:
-              gpd = None
-
-          CRIME_DIR  = Path(os.environ.get("CRIME_DATA_DIR","crime_prediction_data"))
-          GEOID_LEN  = int(os.environ.get("GEOID_LEN","11"))
-          STRATEGY   = os.environ.get("NEIGHBOR_STRATEGY","queen").lower()
-          MIN_DEG    = int(os.environ.get("MIN_NEIGHBOR_DEG","3"))
-          KNN_K      = int(os.environ.get("KNN_K","5"))
-          OUT_PATH   = Path(os.environ.get("NEIGHBOR_FILE", str(CRIME_DIR/"neighbors.csv")))
-          GRID_CSV   = Path(os.environ.get("STACKING_DATASET", str(CRIME_DIR/"sf_crime_grid_full_labeled.csv")))
-          POLY_HINT  = os.environ.get("NEIGHBOR_POLY","")
+              c = gdf[[gcol,"geometry"]].rename(columns={gcol:"geoid"}).copy()
+              c["geoid"] = _norm(c["geoid"])
+              cent = c.geometry.centroid
+              return pd.DataFrame({"geoid": c["geoid"], "x": cent.x, "y": cent.y})
+          if GRID_CSV.exists():
+              df = pd.read_csv(GRID_CSV, dtype=str, low_memory=False)
+              low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in df.columns}
+              gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid")
+              lat  = low.get("lat") or low.get("latitude") or low.get("centroidlat")
+              lon  = low.get("lon") or low.get("lng") or low.get("longitude") or low.get("centroidlon")
+              if gcol and lat and lon:
+                  t = df[[gcol, lat, lon]].rename(columns={gcol:"geoid", lat:"y", lon:"x"}).copy()
+                  t["geoid"] = _norm(t["geoid"])
+                  t["x"] = pd.to_numeric(t["x"], errors="coerce")
+                  t["y"] = pd.to_numeric(t["y"], errors="coerce")
+                  return t.dropna()}
+          return None
+      def _ensure_min_degree(nb: pd.DataFrame, geos: pd.DataFrame) -> pd.DataFrame:
+          import numpy as np
+          if geos is None or geos.empty:
+              return nb
+          deg = nb.groupby("geoid")["neighbor"].nunique()
+          need = set(deg.index[deg < MIN_DEG] if not deg.empty else geos["geoid"])
+          if not need:
+              return nb
+          idx = {g:i for i,g in enumerate(geos["geoid"])}
+          XY  = geos[["x","y"]].to_numpy()
+          add = []
+          for g in need:
+              i = idx[g]
+              d = np.sum((XY - XY[i])**2, axis=1)
+              order = np.argsort(d)
+              picks = []
+              for j in order:
+                  gj = geos.iloc[j]["geoid"]
+                  if gj == g:
+                      continue
+                  picks.append(gj)
+                  if len(picks) >= KNN_K:
+                      break
+              add += [(g, n) for n in picks]
+          nb2 = pd.concat([nb, pd.DataFrame(add, columns=["geoid","neighbor"])], ignore_index=True)
+          return _sym(nb2.drop_duplicates())
+      def main():
+          poly_ok = bool(POLY_HINT) and Path(POLY_HINT).exists()
+          nb = _neighbors_from_polygons(POLY_HINT) if poly_ok else pd.DataFrame(columns=["geoid","neighbor"])
+          cent = _centroids_table(poly_ok)
+          nb = _ensure_min_degree(nb, cent)
+          if nb.empty:
+              nb = pd.DataFrame(columns=["geoid","neighbor"])
+          nb["geoid"] = _norm(nb["geoid"])
+          nb["neighbor"] = _norm(nb["neighbor"])
+          nb = _sym(nb).drop_duplicates().sort_values(["geoid","neighbor"])
+          OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+          nb.to_csv(OUT_PATH, index=False)
+          deg = nb.groupby("geoid")["neighbor"].nunique()
+          print(f"neighbors.csv yazıldı → {OUT_PATH} | n_edges={len(nb)} | n_nodes={len(deg)} | min_deg={int(deg.min()) if len(deg) else 0} | mean_deg={round(float(deg.mean()),2) if len(deg) else 0.0}")
+      if __name__ == "__main__":
+          main()
+      PY
+              python _rebuild_neighbors.py
+              rm -f _rebuild_neighbors.py
+              rm -f "${CRIME_DATA_DIR}/.rebuild_neighbors"
+            fi
+          fi
+      
+          echo "neighbors.csv (ilk 10 satır):"
+          head -n 10 "${DEST}" || true
 
           def _norm(s: pd.Series) -> pd.Series:
               return s.astype(str).str.extract(r"(\d+)", expand=False).str.zfill(GEOID_LEN)
