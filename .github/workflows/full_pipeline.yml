@@ -27,7 +27,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CRIME_DATA_DIR: crime_prediction_data
+  CRIME_DATA_DIR: crime_prediction_data_pre
   GEOID_LEN: "11"
 
   BACKFILL_DAYS: "0"
@@ -68,7 +68,7 @@ jobs:
           git lfs install
           git lfs pull
           echo "Repo root:"; ls -lah
-          echo "crime_prediction_data:"; ls -lah crime_prediction_data || true
+          echo "crime_prediction_data_pre:"; ls -lah crime_prediction_data_pre || true
           echo "CRIME_DATA_DIR:"; ls -lah "${CRIME_DATA_DIR}" || true
 
       - name: Ensure data dir
@@ -338,8 +338,8 @@ jobs:
           python - <<'PY'
           import os, pandas as pd
           from pathlib import Path
-          CRIME_DIR = os.getenv("CRIME_DATA_DIR","crime_prediction_data")
-          candidates = [Path(CRIME_DIR)/"sf_crime_07.csv", Path("crime_prediction_data")/"sf_crime_07.csv",
+          CRIME_DIR = os.getenv("CRIME_DATA_DIR","crime_prediction_data_pre")
+          candidates = [Path(CRIME_DIR)/"sf_crime_07.csv", Path("crime_prediction_data_pre")/"sf_crime_07.csv",
                         Path("crime_data")/"sf_crime_07.csv", Path("sf_crime_07.csv"), Path("outputs")/"sf_crime_07.csv"]
           src_path = next((p for p in candidates if p.exists()), None)
           if src_path is None: raise FileNotFoundError("sf_crime_07.csv not found")
@@ -366,7 +366,7 @@ jobs:
           set -euo pipefail
           DEST="${CRIME_DATA_DIR}/neighbors.csv"; mkdir -p "${CRIME_DATA_DIR}"
           echo "→ hedef: $DEST"
-          for p in "${CRIME_DATA_DIR}/neighbors.csv" "crime_prediction_data/neighbors.csv" "neighbors.csv" "data/neighbors.csv" "inputs/neighbors.csv"
+          for p in "${CRIME_DATA_DIR}/neighbors.csv" "crime_prediction_data_pre/neighbors.csv" "neighbors.csv" "data/neighbors.csv" "inputs/neighbors.csv"
           do
             if [ -f "$p" ]; then
               if [ -e "$DEST" ] && [ "$p" -ef "$DEST" ]; then echo "ℹ️ Zaten hedefte: $DEST"; else cp -f "$p" "$DEST"; echo "✅ Copied: $p → $DEST"; fi
@@ -511,7 +511,7 @@ jobs:
           set -e
           python - <<'PY'
           import os, re, glob, pandas as pd, pathlib
-          root = os.environ.get("CRIME_DATA_DIR","crime_prediction_data")
+          root = os.environ.get("CRIME_DATA_DIR","crime_prediction_data_pre")
           pathlib.Path(root).mkdir(parents=True, exist_ok=True)
           csvs = [p for p in glob.glob(os.path.join(root,"*.csv")) if not p.endswith("_y.csv")]
           def y_name(p): 
