@@ -142,7 +142,7 @@ jobs:
       - name: 00) Prefetch sf_crime_y.csv from previous successful run (artifact)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
-          GH_TOKEN: ${{ github.token }}              # gh CLI bunu otomatik kullanır; login YOK
+          GH_TOKEN: ${{ github.token }}
           ARTIFACT_NAME: sf-crime-pipeline-output
           WORKFLOW_NAME: Full SF Crime Pipeline
           TARGET_FILE: sf_crime_y.csv
@@ -168,7 +168,6 @@ jobs:
           mkdir -p _prev
           FOUND=""
 
-          # Son 10 başarılı run içinde ara; ilk bulduğunu kopyala
           RUNS=$(gh run list -R "${GITHUB_REPOSITORY}" \
                   --workflow "${WORKFLOW_NAME}" --status success \
                   -L 10 --json databaseId -q '.[].databaseId' || true)
@@ -216,11 +215,10 @@ jobs:
           restore-keys: |
             911-${{ runner.os }}-
 
-      # ✅ GH auth: login YOK (GH_TOKEN var)
       - name: Prefetch sf_911_last_5_year_y.csv from previous successful run (artifact)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
-          GH_TOKEN: ${{ github.token }}   # gh için non-interactive auth
+          GH_TOKEN: ${{ github.token }}
           ARTIFACT_NAME: sf-crime-pipeline-output
           WORKFLOW_NAME: Full SF Crime Pipeline
           TARGET_FILE: sf_911_last_5_year_y.csv
@@ -293,7 +291,6 @@ jobs:
           restore-keys: |
             311-${{ runner.os }}-
 
-      # ✅ YENİ: 311 özet dosyası için artifact prefetch (GH login YOK)
       - name: Prefetch sf_311_last_5_years_y.csv from previous successful run (artifact)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
@@ -402,18 +399,13 @@ jobs:
           p = os.path.join(os.environ["CRIME_DATA_DIR"], "sf_population.csv")
           df = pd.read_csv(p)
           low = {c.lower(): c for c in df.columns}
-
-          # GEOID standardizasyonu
           if 'geoid' not in low and 'geography_id' in low:
               df.rename(columns={low['geography_id']: 'GEOID'}, inplace=True)
-
-          # Nüfus sütununu 'population' yap
           for cand in ['population','total_population','b01003_001e','estimate','total','value']:
               if cand in low:
                   if 'population' not in df.columns:
                       df.rename(columns={low[cand]: 'population'}, inplace=True)
                   break
-
           df.to_csv(p, index=False)
           print("Normalized headers:", df.columns.tolist())
           PY
@@ -459,21 +451,7 @@ jobs:
           elif [ -f scripts/enrich_police_gov_06_to_07.py ]; then python -u scripts/enrich_police_gov_06_to_07.py;
           else echo "Polis/Gov adımı bulunamadı"; exit 2; fi
 
-      - name: 09) Hava durumu → sf_crime_08.csv
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        run: |
-          set -e
-          if [ -f update_weather.py ]; then
-            python -u update_weather.py
-          elif [ -f scripts/update_weather.py ]; then
-            python -u scripts/update_weather.py
-          else
-            echo "❌ Weather script not found"; exit 2
-          fi
-          echo "sf_crime_08.csv — ilk 5 satır:"
-          head -n 5 "${CRIME_DATA_DIR}/sf_crime_08.csv" || head -n 5 sf_crime_08.csv || true
-            
-      - name: 10) sf_crime_08_static üretimi (07 → 08_static)
+      - name: 09) sf_crime_08_static üretimi (07 → 08_static)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         run: |
           set -e
@@ -481,7 +459,7 @@ jobs:
           import os
           import pandas as pd
           from pathlib import Path
-      
+
           CRIME_DIR = os.getenv("CRIME_DATA_DIR","crime_prediction_data")
           candidates = [
               Path(CRIME_DIR) / "sf_crime_07.csv",
@@ -493,20 +471,19 @@ jobs:
           src_path = next((p for p in candidates if p.exists()), None)
           if src_path is None:
               raise FileNotFoundError("sf_crime_07.csv not found in known locations")
-      
+
           dst = str(Path(CRIME_DIR)/"sf_crime_08_static.csv")
-      
+
           try:
               from scripts.common import clean_and_save_crime_08
               clean_and_save_crime_08(str(src_path), dst)
               print("✅ sf_crime_08_static hazır →", dst)
           except Exception as e:
-              # Fonksiyon yoksa ya da hata verdiyse, minimum bir fallback uygula (passthrough)
               print(f"⚠️ clean_and_save_crime_08 kullanılamadı ({e}); passthrough yazılıyor.")
               df = pd.read_csv(src_path, low_memory=False)
               df.to_csv(dst, index=False)
               print("✅ Passthrough 08_static yazıldı →", dst)
-      
+
           try:
               df = pd.read_csv(dst, low_memory=False)
               with pd.option_context("display.max_columns", None, "display.width", 2000):
@@ -558,7 +535,6 @@ jobs:
           mkdir -p "${CRIME_DATA_DIR}"
 
           echo "→ hedef: $DEST"
-          # 1) Varsa repodan kopyala
           for p in \
             "${CRIME_DATA_DIR}/neighbors.csv" \
             "crime_prediction_data/neighbors.csv" \
@@ -575,7 +551,6 @@ jobs:
             fi
           done
 
-          # 2) Başlıkları normalize et → geoid,neighbor
           python - <<'PY'
           import os, pandas as pd, sys
           p = os.path.join(os.environ["CRIME_DATA_DIR"], "neighbors.csv")
@@ -595,7 +570,6 @@ jobs:
           L = int(os.environ.get("GEOID_LEN","11"))
           for c in ("geoid","neighbor"):
               df[c] = df[c].astype(str).str.extract(r"(\d+)", expand=False).str.zfill(L)
-          # çift yönlü ve tekille
           df = pd.concat([df, df.rename(columns={"geoid":"neighbor","neighbor":"geoid"})], ignore_index=True)
           df = df.dropna().drop_duplicates()
           df = df[df["geoid"] != df["neighbor"]]
@@ -603,7 +577,6 @@ jobs:
           print("Neighbors headers →", ["geoid","neighbor"], f"(rows={len(df)})")
           PY
 
-          # 3) Kalite kontrol
           python - <<'PY'
           import os, pandas as pd
           from pathlib import Path
@@ -643,7 +616,6 @@ jobs:
           mkdir -p "${CRIME_DATA_DIR}"
 
           echo "→ hedef: $DEST"
-          # 1) Varsa repodan kopyala
           for p in \
             "${CRIME_DATA_DIR}/neighbors.csv" \
             "crime_prediction_data/neighbors.csv" \
@@ -660,7 +632,6 @@ jobs:
             fi
           done
 
-          # 2) Başlık normalize → geoid,neighbor
           python - <<'PY'
           import os, pandas as pd, sys
           p = os.path.join(os.environ["CRIME_DATA_DIR"], "neighbors.csv")
@@ -687,30 +658,6 @@ jobs:
           print("Neighbors headers →", ["geoid","neighbor"], f"(rows={len(df)})")
           PY
 
-          # 3) Kalite kontrol
-          python - <<'PY'
-          import os, pandas as pd
-          from pathlib import Path
-          p = Path(os.environ["CRIME_DATA_DIR"]) / "neighbors.csv"
-          min_deg = int(os.environ.get("MIN_NEIGHBOR_DEG","3"))
-          if not p.exists() or p.stat().st_size == 0:
-              need=True; reason="yok/boş"
-          else:
-              try:
-                  df = pd.read_csv(p, dtype=str)
-                  ok = set(df.columns) >= {"geoid","neighbor"} and len(df)>0
-                  mindeg = (df.groupby("geoid")["neighbor"].nunique().min() if ok else 0)
-                  need = (not ok) or (mindeg is None) or (mindeg < min_deg)
-                  reason = f"min_deg={mindeg}<{min_deg}" if ok else "geçersiz başlık/boş"
-              except Exception as e:
-                  need=True; reason=f"hata:{e}"
-          if need:
-              Path(os.environ["CRIME_DATA_DIR"]).joinpath(".rebuild_neighbors").write_text(reason)
-              print("REBUILD=1 →", reason)
-          else:
-              print("REBUILD=0 → yeterli kalite")
-          PY
-
           # 4) Yeniden üretim gerekiyorsa
           if [ -f "${CRIME_DATA_DIR}/.rebuild_neighbors" ]; then
             if [ ! -f "${NEIGHBOR_POLY}" ]; then
@@ -727,7 +674,7 @@ jobs:
               import geopandas as gpd
           except Exception:
               gpd = None
-          
+
           CRIME_DIR  = Path(os.environ.get("CRIME_DATA_DIR","crime_prediction_data"))
           GEOID_LEN  = int(os.environ.get("GEOID_LEN","11"))
           STRATEGY   = os.environ.get("NEIGHBOR_STRATEGY","queen").lower()
@@ -736,16 +683,16 @@ jobs:
           OUT_PATH   = Path(os.environ.get("NEIGHBOR_FILE", str(CRIME_DIR/"neighbors.csv")))
           GRID_CSV   = Path(os.environ.get("STACKING_DATASET", str(CRIME_DIR/"sf_crime_grid_full_labeled.csv")))
           POLY_HINT  = os.environ.get("NEIGHBOR_POLY","")
-          
+
           def _norm(s: pd.Series) -> pd.Series:
               return s.astype(str).str.extract(r"(\d+)", expand=False).str.zfill(GEOID_LEN)
-          
+
           def _sym(df: pd.DataFrame) -> pd.DataFrame:
               rev = df.rename(columns={"geoid":"neighbor","neighbor":"geoid"})
               out = pd.concat([df, rev], ignore_index=True)
               out = out[out["geoid"] != out["neighbor"]]
               return out.drop_duplicates()
-          
+
           def _neighbors_from_polygons(path: str) -> pd.DataFrame | None:
               if not gpd:
                   return None
@@ -753,7 +700,8 @@ jobs:
                   gdf = gpd.read_file(path)
               except Exception:
                   return None
-              low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in gdf.columns}
+              import re as _re
+              low = {_re.sub(r"[^a-z0-9]","", c.lower()): c for c in gdf.columns}
               gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid") or list(gdf.columns)[0]
               if "geometry" not in gdf.columns:
                   return None
@@ -769,11 +717,12 @@ jobs:
                   "neighbor": gdf.loc[m["j"], "geoid"].to_numpy(),
               })
               return _sym(df.drop_duplicates())
-          
+
           def _centroids_table(poly_ok: bool) -> pd.DataFrame | None:
               if poly_ok and gpd:
                   gdf = gpd.read_file(POLY_HINT)
-                  low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in gdf.columns}
+                  import re as _re
+                  low = {_re.sub(r"[^a-z0-9]","", c.lower()): c for c in gdf.columns}
                   gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid") or list(gdf.columns)[0]
                   c = gdf[[gcol,"geometry"]].rename(columns={gcol:"geoid"}).copy()
                   c["geoid"] = _norm(c["geoid"])
@@ -781,7 +730,8 @@ jobs:
                   return pd.DataFrame({"geoid": c["geoid"], "x": cent.x, "y": cent.y})
               if GRID_CSV.exists():
                   df = pd.read_csv(GRID_CSV, dtype=str, low_memory=False)
-                  low = {re.sub(r"[^a-z0-9]","", c.lower()): c for c in df.columns}
+                  import re as _re
+                  low = {_re.sub(r"[^a-z0-9]","", c.lower()): c for c in df.columns}
                   gcol = low.get("geoid") or low.get("geoid10") or low.get("geographyid")
                   lat  = low.get("lat") or low.get("latitude") or low.get("centroidlat")
                   lon  = low.get("lon") or low.get("lng") or low.get("longitude") or low.get("centroidlon")
@@ -792,7 +742,7 @@ jobs:
                       t["y"] = pd.to_numeric(t["y"], errors="coerce")
                       return t.dropna()
               return None
-          
+
           def _ensure_min_degree(nb: pd.DataFrame, geos: pd.DataFrame) -> pd.DataFrame:
               import numpy as np
               if geos is None or geos.empty:
@@ -819,7 +769,7 @@ jobs:
                   add += [(g, n) for n in picks]
               nb2 = pd.concat([nb, pd.DataFrame(add, columns=["geoid","neighbor"])], ignore_index=True)
               return _sym(nb2.drop_duplicates())
-          
+
           def main():
               poly_ok = bool(POLY_HINT) and Path(POLY_HINT).exists()
               nb = _neighbors_from_polygons(POLY_HINT) if poly_ok else pd.DataFrame(columns=["geoid","neighbor"])
@@ -834,7 +784,7 @@ jobs:
               nb.to_csv(OUT_PATH, index=False)
               deg = nb.groupby("geoid")["neighbor"].nunique()
               print(f"neighbors.csv yazıldı → {OUT_PATH} | n_edges={len(nb)} | n_nodes={len(deg)} | min_deg={int(deg.min()) if len(deg) else 0} | mean_deg={round(float(deg.mean()),2) if len(deg) else 0.0}")
-          
+
           if __name__ == "__main__":
               main()
           PY
@@ -843,18 +793,50 @@ jobs:
               rm -f "${CRIME_DATA_DIR}/.rebuild_neighbors"
             fi
           fi
-          
+
           echo "neighbors.csv (ilk 10 satır):"
           head -n 10 "${DEST}" || true
 
-      - name: "11) Install ML deps for stacking"
+      # ✅ HAVA DURUMU EN SONA ALINDI — GRID-LEVEL JOIN
+      - name: 11) Hava durumu (SON ADIM, grid-level) → STACKING_DATASET’e ekle
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          STACKING_IN:  ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
+          STACKING_OUT: ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
+          WX_LOCATION:  ${{ env.WX_LOCATION }}
+          WX_UNIT:      ${{ env.WX_UNIT }}
+        run: |
+          set -e
+          if [ -f update_weather.py ]; then
+            python -u update_weather.py \
+              --scope grid \
+              --join-keys date,hour \
+              --grid-in  "${STACKING_IN}" \
+              --grid-out "${STACKING_OUT}" \
+              --location "${WX_LOCATION}" \
+              --unit "${WX_UNIT}"
+          elif [ -f scripts/update_weather.py ]; then
+            python -u scripts/update_weather.py \
+              --scope grid \
+              --join-keys date,hour \
+              --grid-in  "${STACKING_IN}" \
+              --grid-out "${STACKING_OUT}" \
+              --location "${WX_LOCATION}" \
+              --unit "${WX_UNIT}"
+          else
+            echo "❌ Weather script not found"; exit 2
+          fi
+          echo "📄 Weather eklendi → ${STACKING_OUT} (ilk 5 satır)"
+          head -n 5 "${STACKING_OUT}" || true
+
+      - name: "12) Install ML deps for stacking"
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         run: |
           python -m pip install -U pip wheel setuptools
           pip install pandas numpy scikit-learn joblib
           pip install xgboost lightgbm || true
 
-      - name: "12) Run stacking risk pipeline"
+      - name: "13) Run stacking risk pipeline"
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
           STACKING_DATASET: ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
@@ -870,4 +852,3 @@ jobs:
             exit 2
           fi
           python -u stacking_risk_pipeline.py
-
