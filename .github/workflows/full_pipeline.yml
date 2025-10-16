@@ -27,7 +27,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CRIME_DATA_DIR: crime_prediction_data
+  CRIME_DATA_DIR: crime_prediction_data_per
   GEOID_LEN: "11"
 
   # I/O davranışı
@@ -72,7 +72,7 @@ jobs:
           git lfs install
           git lfs pull
           echo "Repo root:"; ls -lah
-          echo "crime_prediction_data:"; ls -lah crime_prediction_data || true
+          echo "crime_prediction_data_per:"; ls -lah crime_prediction_data_per || true
           echo "CRIME_DATA_DIR:"; ls -lah "${CRIME_DATA_DIR}" || true
 
       - name: Ensure data dir
