@@ -37,7 +37,7 @@ permissions:
   contents: write
 
 env:
-  CRIME_DATA_DIR: crime_prediction_data
+  CRIME_DATA_DIR: crime_prediction_data_per
   GEOID_LEN: "11"
   SOCS_APP_TOKEN: ${{ secrets.SOCS_APP_TOKEN }}
   PYTHONUNBUFFERED: "1"
@@ -48,9 +48,9 @@ env:
   LABEL_STYLE: "legacy01"          # Y_label 0/1 eski usul
 
   # stacking & forecast için varsayılan yollar
-  STACKING_DATASET: crime_prediction_data/sf_crime_grid_full_labeled.parquet
-  MODEL_DIR: crime_prediction_data/models_cat
-  FORECAST_OUT: crime_prediction_data/sf_forecast_cat
+  STACKING_DATASET: ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.parquet
+  MODEL_DIR: ${{ env.CRIME_DATA_DIR }}/models_cat
+  FORECAST_OUT: ${{ env.CRIME_DATA_DIR }}/sf_forecast_cat
   HORIZONS: "24h,7d,30d,90d,365d"
 
 jobs:
@@ -67,7 +67,7 @@ jobs:
           git lfs install
           git lfs pull
           echo "Repo kök:"; ls -lah
-          echo "crime_prediction_data:"; ls -lah crime_prediction_data || true
+          echo "CRIME_DATA_DIR (${CRIME_DATA_DIR}):"; ls -lah "${CRIME_DATA_DIR}" || true
 
       # ---- En son BAŞARILI full pipeline artifact'ını indir (fallback için) ----
       - name: Restore last-good snapshot (from Full SF Crime Pipeline)
@@ -84,8 +84,8 @@ jobs:
           if [ -d last_good ]; then
             echo "last_good/ içeriği:"
             ls -lah last_good || true
-            echo "last_good/crime_prediction_data/ içeriği:"
-            ls -lah last_good/crime_prediction_data || true
+            echo "last_good/${CRIME_DATA_DIR}/ içeriği:"
+            ls -lah "last_good/${CRIME_DATA_DIR}" || true
           else
             echo "last_good/ yok (daha önce başarılı full pipeline artifact bulunamadı)."
           fi
@@ -112,8 +112,8 @@ jobs:
           echo "Seçili adım: ${{ github.event.inputs.step }}"
           echo "Mevcut dosyalar:"
           ls -lah
-          echo "crime_prediction_data/"
-          ls -lah crime_prediction_data || true
+          echo "CRIME_DATA_DIR (${CRIME_DATA_DIR})/"
+          ls -lah "${CRIME_DATA_DIR}" || true
 
       # ---- ÇALIŞTIRMA (Hata → fallback → devam) ----
       - name: Run selected step (with parquet-aware fallback)
@@ -130,19 +130,19 @@ jobs:
           set -uo pipefail
 
           copy_fallback() {
-            mkdir -p crime_prediction_data
-            if [ -d last_good/crime_prediction_data ]; then
-              cp -f last_good/crime_prediction_data/*.parquet crime_prediction_data/ 2>/dev/null || true
-              cp -f last_good/crime_prediction_data/*.csv     crime_prediction_data/ 2>/dev/null || true
-              cp -rf last_good/crime_prediction_data/sf_forecast_cat crime_prediction_data/ 2>/dev/null || true
-              cp -f last_good/crime_prediction_data/*.geojson  crime_prediction_data/ 2>/dev/null || true
-              echo "ℹ️ Fallback: last_good/crime_prediction_data → crime_prediction_data/ kopyalandı."
+            mkdir -p "${CRIME_DATA_DIR}"
+            if [ -d "last_good/${CRIME_DATA_DIR}" ]; then
+              cp -f "last_good/${CRIME_DATA_DIR}"/*.parquet "${CRIME_DATA_DIR}/" 2>/dev/null || true
+              cp -f "last_good/${CRIME_DATA_DIR}"/*.csv     "${CRIME_DATA_DIR}/" 2>/dev/null || true
+              cp -rf "last_good/${CRIME_DATA_DIR}/sf_forecast_cat" "${CRIME_DATA_DIR}/" 2>/dev/null || true
+              cp -f "last_good/${CRIME_DATA_DIR}"/*.geojson "${CRIME_DATA_DIR}/" 2>/dev/null || true
+              echo "ℹ️ Fallback: last_good/${CRIME_DATA_DIR} → ${CRIME_DATA_DIR}/ kopyalandı."
             elif [ -d last_good ]; then
-              cp -f last_good/*.parquet crime_prediction_data/ 2>/dev/null || true
-              cp -f last_good/*.csv     crime_prediction_data/ 2>/dev/null || true
-              cp -rf last_good/sf_forecast_cat crime_prediction_data/ 2>/dev/null || true
-              cp -f last_good/*.geojson crime_prediction_data/ 2>/dev/null || true
-              echo "ℹ️ Fallback: last_good → crime_prediction_data/ kopyalandı."
+              cp -f last_good/*.parquet "${CRIME_DATA_DIR}/" 2>/dev/null || true
+              cp -f last_good/*.csv     "${CRIME_DATA_DIR}/" 2>/dev/null || true
+              cp -rf last_good/sf_forecast_cat "${CRIME_DATA_DIR}/" 2>/dev/null || true
+              cp -f last_good/*.geojson "${CRIME_DATA_DIR}/" 2>/dev/null || true
+              echo "ℹ️ Fallback: last_good → ${CRIME_DATA_DIR}/ kopyalandı."
             else
               echo "❌ Fallback mümkün değil: last_good/ yok."
             fi
@@ -200,14 +200,14 @@ jobs:
           python - <<'PY'
           import os, glob
           import polars as pl
-          d="crime_prediction_data"
+          d="${CRIME_DATA_DIR}"
           for f in ["sf_crime_grid_full_labeled.parquet","risk_hourly.parquet","patrol_recs_multi.parquet","sf_crime_08.parquet"]:
               p=os.path.join(d,f)
               if os.path.exists(p):
                   print("===",f,"==="); print(pl.scan_parquet(p).head(5).collect())
           PY
           echo "CSV quick heads:"
-          head -n 5 crime_prediction_data/sf_crime_08.csv 2>/dev/null || true
+          head -n 5 "${CRIME_DATA_DIR}/sf_crime_08.csv" 2>/dev/null || true
 
       - name: Pack outputs
         run: |
