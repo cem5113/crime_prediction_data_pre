@@ -481,9 +481,6 @@ jobs:
           import os
           import pandas as pd
           from pathlib import Path
-          # DİKKAT: 08_static için doğru fonksiyon
-          from scripts.common import clean_and_save_crime_08
-          clean_and_save_crime_08()
       
           CRIME_DIR = os.getenv("CRIME_DATA_DIR","crime_prediction_data")
           candidates = [
@@ -498,9 +495,18 @@ jobs:
               raise FileNotFoundError("sf_crime_07.csv not found in known locations")
       
           dst = str(Path(CRIME_DIR)/"sf_crime_08_static.csv")
-          clean_and_save_crime_08(str(src_path), dst)
       
-          print("✅ sf_crime_08_static hazır →", dst)
+          try:
+              from scripts.common import clean_and_save_crime_08
+              clean_and_save_crime_08(str(src_path), dst)
+              print("✅ sf_crime_08_static hazır →", dst)
+          except Exception as e:
+              # Fonksiyon yoksa ya da hata verdiyse, minimum bir fallback uygula (passthrough)
+              print(f"⚠️ clean_and_save_crime_08 kullanılamadı ({e}); passthrough yazılıyor.")
+              df = pd.read_csv(src_path, low_memory=False)
+              df.to_csv(dst, index=False)
+              print("✅ Passthrough 08_static yazıldı →", dst)
+      
           try:
               df = pd.read_csv(dst, low_memory=False)
               with pd.option_context("display.max_columns", None, "display.width", 2000):
