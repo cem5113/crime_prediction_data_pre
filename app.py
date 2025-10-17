@@ -21,51 +21,95 @@ except Exception:
     def build_forensic_report(**kwargs):
         return None
 
-st.set_page_config(page_title="Veri Güncelleme (Parquet)", layout="wide")
+st.set_page_config(page_title="Veri Güncelleme (CSV + Parquet + ZIP)", layout="wide")
 
 # =========================
-# Parquet-first yardımcılar
+# I/O yardımcılar
 # =========================
 
 def _ensure_pyarrow():
     try:
         import pyarrow  # noqa
-    except Exception as e:
+    except Exception:
         st.error("Parquet I/O için 'pyarrow' gerekli. Lütfen 'pip install pyarrow' kurun.")
         st.stop()
 
 _ensure_pyarrow()
 
+# Kaydetme davranışları
+CSV_COMPRESSION = os.environ.get("CSV_COMPRESSION", "gzip")  # none|gzip|bz2|zip
+PARQUET_COMPRESSION = os.environ.get("PARQUET_COMPRESSION", "snappy")  # snappy|gzip|zstd
+
+def _as_y_csv_path(p: Union[str, Path]) -> Path:
+    """Verilen yol için daima *_y.csv ismi döndürür."""
+    p = Path(p)
+    stem = p.stem
+    if stem.endswith("_y"):
+        return p.with_suffix(".csv")
+    return p.with_name(f"{stem}_y.csv").with_suffix(".csv")
+
 def read_df(path: Union[str, Path]) -> pd.DataFrame:
-    """Parquet öncelikli oku; CSV ise otomatik oku."""
+    """Parquet öncelikli oku; yoksa CSV'yi (y suffix dahil) dene."""
     p = Path(path)
+    # 1) Parquet (doğrudan)
     if p.suffix.lower() == ".parquet" and p.exists():
         return pd.read_parquet(p)
-    if p.suffix.lower() == ".csv" and p.exists():
-        return pd.read_csv(p, low_memory=False)
-    # uygun parquet varsa onu kullan
+    # 2) CSV (y suffix öncelik)
+    csv_y = _as_y_csv_path(p)
+    if csv_y.exists():
+        return pd.read_csv(csv_y, low_memory=False)
+    # 3) Parquet aynı adla
     pq = p.with_suffix(".parquet")
     if pq.exists():
         return pd.read_parquet(pq)
-    # CSV varsa fallback + dönüştür
+    # 4) Düz .csv varsa
     csvp = p.with_suffix(".csv")
     if csvp.exists():
-        df = pd.read_csv(csvp, low_memory=False)
-        try:
-            df.to_parquet(pq, index=False)
-        except Exception:
-            pass
-        return df
-    raise FileNotFoundError(f"Bulunamadı: {p} (veya {pq} / {csvp})")
+        return pd.read_csv(csvp, low_memory=False)
+    raise FileNotFoundError(f"Bulunamadı: {p} (veya {pq} / {csvp} / {csv_y})")
 
-def write_df(df: pd.DataFrame, path: Union[str, Path]) -> Path:
-    """Parquet olarak yaz; dosya uzantısı .csv verilse bile .parquet üretir."""
-    p = Path(path)
-    if p.suffix.lower() != ".parquet":
-        p = p.with_suffix(".parquet")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(p, index=False)
-    return p
+def write_df(df: pd.DataFrame, path: Union[str, Path]) -> Dict[str, Path]:
+    """
+    Aynı DataFrame'i hem *_y.csv hem de .parquet olarak yazar, ardından ikisini tek bir ZIP'e paketler.
+    - CSV: *_y.csv (CSV_COMPRESSION ile)
+    - Parquet: .parquet (PARQUET_COMPRESSION ile)
+    - ZIP: .zip (içinde her ikisi de var)
+    Dönen dict: {"csv": Path, "parquet": Path, "zip": Path}
+    """
+    base = Path(path)
+    base.parent.mkdir(parents=True, exist_ok=True)
+
+    # CSV yolu (her zaman *_y.csv)
+    csv_path = _as_y_csv_path(base)
+    comp = (CSV_COMPRESSION or "").lower()
+    if comp == "gzip":
+        df.to_csv(csv_path, index=False, compression="gzip")
+    elif comp == "bz2":
+        df.to_csv(csv_path, index=False, compression="bz2")
+    elif comp == "zip":
+        # Tek dosyalık zip (CSV kendi içinde ziplenir). Artifact için ayrıca dış zip oluşturacağız.
+        df.to_csv(csv_path, index=False, compression={"method": "zip", "archive_name": csv_path.name})
+    else:
+        df.to_csv(csv_path, index=False)
+
+    # Parquet yolu
+    pq_path = base.with_suffix(".parquet")
+    df.to_parquet(pq_path, index=False, compression=PARQUET_COMPRESSION)
+
+    # Dış ZIP: hem parquet hem csv bir arada
+    zip_path = base.with_suffix(".zip")
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        if pq_path.exists():
+            zf.write(pq_path, arcname=pq_path.name)
+        if csv_path.exists():
+            zf.write(csv_path, arcname=csv_path.name)
+
+    try:
+        st.caption(f"💾 Kaydedildi → CSV: {csv_path.name} | Parquet: {pq_path.name} | ZIP: {zip_path.name}")
+    except Exception:
+        pass
+
+    return {"csv": csv_path, "parquet": pq_path, "zip": zip_path}
 
 def csv_to_parquet_if_needed(src_csv: Union[str, Path], dst_parquet: Optional[Union[str, Path]] = None) -> Optional[Path]:
     """CSV'yi parquet'e çevirir; dst verilmezse aynı ada .parquet yazar."""
@@ -76,7 +120,7 @@ def csv_to_parquet_if_needed(src_csv: Union[str, Path], dst_parquet: Optional[Un
         dst = Path(dst_parquet) if dst_parquet else src.with_suffix(".parquet")
         df = pd.read_csv(src, low_memory=False)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(dst, index=False)
+        df.to_parquet(dst, index=False, compression=PARQUET_COMPRESSION)
         return dst
     except Exception:
         return None
@@ -200,10 +244,9 @@ def fetch_file_from_latest_artifact(pick_names: list[str], artifact_name="sf-cri
                     if any(n.endswith(p) for p in pick_names):
                         return zf.read(n)
     return None
-    
+
 def dispatch_workflow(persist="artifact", force=True, top_k="50", wf_selector: Optional[str]=None, ref: Optional[str]=None):
     import base64
-
     base = f"https://api.github.com/repos/{GITHUB_REPO}"
     headers = _gh_headers()
 
@@ -213,19 +256,17 @@ def dispatch_workflow(persist="artifact", force=True, top_k="50", wf_selector: O
         ref = repo_meta.get("default_branch", "main")
 
     # 1) Hangi workflow? (id / dosya adı / görünen ad)
-    wf_input = wf_selector or GITHUB_WORKFLOW  # örn: "full_pipeline.yml" ya da "Full SF Crime Pipeline" ya da "198276037"
+    wf_input = wf_selector or GITHUB_WORKFLOW
     wf_id = None
     wf_path = None
     wf_state = None
 
-    # Doğrudan sayıysa id kabul et
     if re.fullmatch(r"\d+", str(wf_input or "")):
         wf_id = str(wf_input)
         meta = requests.get(f"{base}/actions/workflows/{wf_id}", headers=headers, timeout=20).json()
         wf_state = meta.get("state")
         wf_path = meta.get("path")
     else:
-        # Listele ve path/name eşleştir
         lst = requests.get(f"{base}/actions/workflows", headers=headers, timeout=20).json()
         for w in lst.get("workflows", []):
             if w.get("path","").endswith(f"/{wf_input}") or w.get("name","") == wf_input or w.get("path","") == wf_input:
@@ -250,7 +291,6 @@ def dispatch_workflow(persist="artifact", force=True, top_k="50", wf_selector: O
     except Exception:
         pass
 
-    # Basit ama sağlam bir kontrol (yorum satırları/indent farklarıyla false positive azaltmak için ^\s* ile)
     has_dispatch = bool(re.search(r"(?m)^\s*workflow_dispatch\s*:\s*$", content))
     if not has_dispatch:
         return {
@@ -263,7 +303,6 @@ def dispatch_workflow(persist="artifact", force=True, top_k="50", wf_selector: O
             "ref": ref,
         }
 
-    # 3) dispatch
     payload = {
         "ref": ref,
         "inputs": {
@@ -356,7 +395,7 @@ def _mask_token(u: str) -> str:
         return str(u)
 
 # ====================================
-# İndirilebilirler (Parquet kaydetme)
+# İndirilebilirler (CSV+Parquet+ZIP)
 # ====================================
 DOWNLOADS = {
     "Suç Taban (latest, CSV → Parquet)": {
@@ -550,7 +589,7 @@ def download_and_preview_parquet(name, info):
                 if isinstance(data, dict): st.json(data)
                 elif isinstance(data, list): st.json(data[:3])
                 else: st.code(str(data)[:1000])
-            except Exception as e:
+            except Exception:
                 st.code(Path(json_path).read_text(encoding="utf-8")[:2000])
         except Exception as e:
             st.error(f"❌ JSON indirilemedi: {e}")
@@ -613,7 +652,7 @@ def download_and_preview_parquet(name, info):
             head = pd.read_csv(csv_path, nrows=3)
             st.dataframe(head)
             st.caption(f"📌 Sütunlar: {list(head.columns)}")
-        except Exception as e:
+        except Exception:
             st.info("CSV önizleme de başarısız.")
 
 st.markdown("### 1) (Opsiyonel) Verileri indir → Parquet’e dönüştür → Önizle")
@@ -767,7 +806,7 @@ def load_sf_crime_08(local_path: Path) -> Optional[pd.DataFrame]:
     return df
 
 # ==========================================
-# Rare grouping + zenginleştir + Parquet yaz
+# Rare grouping + zenginleştir + Kaydet (CSV+Parquet+ZIP)
 # ==========================================
 def _group_rare_labels(
     df: pd.DataFrame,
@@ -815,7 +854,7 @@ def _group_rare_labels(
     return grouped
 
 def clean_and_save_crime_09(input_obj: Union[str, Path, pd.DataFrame]="sf_crime_08.parquet",
-                             output_path: Union[str, Path]="sf_crime_09.parquet") -> pd.DataFrame:
+                             output_path: Union[str, Path]="sf_crime_09") -> pd.DataFrame:
     # input: DataFrame veya dosya yolu (Parquet/CSV)
     if isinstance(input_obj, pd.DataFrame):
         df = input_obj.copy()
@@ -988,14 +1027,14 @@ def clean_and_save_crime_09(input_obj: Union[str, Path, pd.DataFrame]="sf_crime_
         st.caption("🧩 Yeni mekânsal-zamansal özellikler (ilk 20 satır):")
         st.dataframe(df[preview_cols].head(20))
 
-    outp = write_df(df, output_path)
-    print(f"✅ {outp.name} kaydedildi. Satır sayısı: {len(df)}")
+    outs = write_df(df, output_path)  # CSV+Parquet+ZIP
+    print(f"✅ Kayıtlar hazır → CSV: {outs['csv'].name} | Parquet: {outs['parquet'].name} | ZIP: {outs['zip'].name} · Satır: {len(df)}")
     return df
 
 # =======================
 # UI: 08 → 09 → Model
 # =======================
-st.title("📦 Günlük Suç Tahmin — Parquet Pipeline")
+st.title("📦 Günlük Suç Tahmin — CSV + Parquet + ZIP Pipeline")
 
 with st.sidebar.expander("Workflow ayarları", True):
     wf_default = os.environ.get("GITHUB_WORKFLOW", "full_pipeline.yml")
@@ -1082,13 +1121,13 @@ st.markdown("### 3) Güncel sf_crime_08 (ilk 20 satır)")
 df08 = load_sf_crime_08(DATA_DIR / "sf_crime_08.csv")
 if df08 is not None:
     st.dataframe(df08.head(20))
-    # 09’u Parquet yaz
-    clean_and_save_crime_09(df08, DATA_DIR / "sf_crime_09.parquet")
-    st.success("✅ sf_crime_09.parquet kaydedildi.")
+    # 09’u CSV+Parquet+ZIP yaz
+    clean_and_save_crime_09(df08, DATA_DIR / "sf_crime_09")
+    st.success("✅ sf_crime_09 (CSV+Parquet+ZIP) kaydedildi.")
 else:
     st.info("Henüz sf_crime_08 bulunamadı. Pipeline’ı çalıştırabilir veya artifact erişimini ayarlayabilirsiniz.")
 
-# 4) sf_crime_09 göster
+# 4) sf_crime_09 göster (Parquet öncelikli oku)
 try:
     df09 = read_df(DATA_DIR / "sf_crime_09.parquet")
     st.markdown("### 4) Güncel sf_crime_09 (ilk 20 satır)")
@@ -1097,7 +1136,7 @@ except Exception as e:
     st.warning(f"sf_crime_09 okunamadı: {e}")
     df09 = None
 
-# 5) Hızlı Model (Parquet I/O)
+# 5) Hızlı Model (CSV+Parquet I/O, ZIP paket)
 if df09 is not None:
     st.markdown("### 5) Hızlı Model (ZI/Hurdle + Quantile + Kalibrasyon)")
     if st.button("🧠 Modeli Eğit (örnek)"):
@@ -1133,198 +1172,85 @@ if df09 is not None:
         st.write("Varlık modeli AUC:", float(roc_auc_score(y_occ.iloc[test_idx], p_hat)))
         st.write("Brier:", float(brier_score_loss(y_occ.iloc[test_idx], p_hat)))
 
-        quantiles = [0.1, 0.5, 0.9]
-        q_models = {}
-        for q in quantiles:
-            qr = LGBMRegressor(objective="quantile", alpha=q,
-                               n_estimators=400, learning_rate=0.05, random_state=42)
-            tr_idx_pos = X_cnt.index.intersection(X_occ.index[train_idx])
-            te_idx_pos = X_cnt.index.intersection(X_occ.index[test_idx])
-            qr.fit(X_cnt.loc[tr_idx_pos], y_cnt.loc[tr_idx_pos])
-            if q == 0.5:
-                pred_med = qr.predict(X_cnt.loc[te_idx_pos])
-                st.write("Pozitiflerde MAE (median):",
-                         float(mean_absolute_error(y_cnt.loc[te_idx_pos], pred_med)))
-            q_models[q] = qr
+        # ======================
+        # Hurdle (Zero-inflated) ikinci aşama: Pozitif sayım modeli
+        # ======================
+        y_cnt_train = y_cnt.iloc[train_idx[y_occ.iloc[train_idx].values == 1]]
+        X_cnt_train = X_cnt.iloc[train_idx[y_occ.iloc[train_idx].values == 1]]
+        y_cnt_test = y_cnt.iloc[test_idx[y_occ.iloc[test_idx].values == 1]]
+        X_cnt_test = X_cnt.iloc[test_idx[y_occ.iloc[test_idx].values == 1]]
 
-        if 0.5 in q_models:
-            mu_med = q_models[0.5].predict(X_all)
-            p_all = clf.predict_proba(X_all)[:, 1]
-            df09["pred_p_occ"] = p_all
-            df09["pred_q10"] = q_models[0.1].predict(X_all) if 0.1 in q_models else np.nan
-            df09["pred_q50"] = mu_med
-            df09["pred_q90"] = q_models[0.9].predict(X_all) if 0.9 in q_models else np.nan
-            df09["pred_expected"] = p_all * np.maximum(mu_med, 0)
-            st.dataframe(df09[["pred_p_occ","pred_q10","pred_q50","pred_q90","pred_expected"]].head(20))
-            out_pred = write_df(df09, DATA_DIR / "sf_crime_09_with_preds.parquet")
-            st.success(f"✔ Tahminli dosya kaydedildi: {out_pred.name}")
+        reg = LGBMRegressor(
+            n_estimators=400,
+            learning_rate=0.05,
+            max_depth=-1,
+            random_state=42,
+            objective="quantile",  # median için
+            alpha=0.5
+        )
+        reg.fit(X_cnt_train, y_cnt_train)
+        y_hat_cnt = reg.predict(X_cnt_test)
+        st.write("Sayım modeli MAE:", float(mean_absolute_error(y_cnt_test, y_hat_cnt)))
 
-        # Açıklanabilirlik
-        st.markdown("### 6) Açıklanabilirlik (global & local)")
-        clf_tree = LGBMClassifier(n_estimators=300, learning_rate=0.05, max_depth=-1,
-                                  class_weight="balanced", random_state=42)
-        clf_tree.fit(X_occ.iloc[train_idx], y_occ.iloc[train_idx])
+        # ======================
+        # Nihai tahmin (hurdle combine)
+        # ======================
+        df09.loc[test_idx, "p_occ"] = p_hat
+        # Tüm pozitif örnekler için sayım tahmini (eğitilen reg ile)
+        df09.loc[y_occ == 1, "pred_cnt"] = reg.predict(X_cnt)
+        df09["crime_pred_mean"] = df09["p_occ"] * df09["pred_cnt"].fillna(0)
+        st.success("✅ Hurdle model tahminleri hesaplandı.")
 
-        expl_clf = shap.TreeExplainer(clf_tree)
-        sample_idx = X_occ.iloc[test_idx].sample(min(1500, len(test_idx)), random_state=42).index
-        shap_vals_cls = expl_clf.shap_values(X_occ.loc[sample_idx])
-        shap_pos = shap_vals_cls[1] if isinstance(shap_vals_cls, list) else shap_vals_cls
-
-        cat_col = ("category_grouped" if "category_grouped" in df09.columns else
-                   ("subcategory_grouped" if "subcategory_grouped" in df09.columns else None))
-        tabs = st.tabs([
-            "Global (Sınıf: var/yok)",
-            "Global (Sayı: kuantil)",
-            "Local (satır)",
-            "PDP / ICE",
-            "Rapor (mini kart)",
-        ])
-
-        # (opsiyonel) forensic rapor
+        # ======================
+        # Kalibrasyon grafiği (isteğe bağlı)
+        # ======================
         try:
-            with st.spinner("📑 Rapor hazırlanıyor..."):
-                res = build_forensic_report(
-                    df09=df09, X_occ=X_occ, X_cnt=X_cnt, y_occ=y_occ, y_cnt=y_cnt,
-                    train_idx=train_idx, test_idx=test_idx,
-                    p_hat=p_hat, q_models=q_models,
-                    pred_med=(pred_med if 'pred_med' in locals() else None),
-                    base_clf=base_clf, clf_tree=clf_tree,
-                    DATA_DIR=DATA_DIR,
-                    out_pred=(str(DATA_DIR / "sf_crime_09_with_preds.parquet"))
-                )
+            fig, ax = plt.subplots(figsize=(5, 4))
+            ax.scatter(p_hat, y_occ.iloc[test_idx], alpha=0.4, label="Gerçek vs Tahmin")
+            ax.plot([0, 1], [0, 1], "r--")
+            ax.set_xlabel("Tahmin Olasılığı (p_occ)")
+            ax.set_ylabel("Gerçek Olasılık")
+            ax.set_title("Kalibrasyon grafiği")
+            ax.legend()
+            st.pyplot(fig)
         except Exception as e:
-            st.error(f"Rapor oluşturulurken hata: {e}")
-            res = None
+            st.warning(f"Kalibrasyon grafiği çizilemedi: {e}")
 
-        if res:
-            st.success(f"Rapor hazır: {res.get('dir')}")
-            colA, colB, colC = st.columns(3)
-            with colA:
-                if res.get("pdf") and Path(res["pdf"]).exists():
-                    st.download_button("📄 PDF indir", Path(res["pdf"]).read_bytes(), file_name="run_report.pdf")
-                st.download_button("📊 Metrikler (CSV)", Path(res["metrics_csv"]).read_bytes(), file_name="metrics.csv")
-            with colB:
-                st.download_button("🔎 SHAP (top20 CSV)", Path(res["shap_csv"]).read_bytes(), file_name="global_shap_top20.csv")
-                st.download_button("🔥 Top-100 riskli hücre", Path(res["top100_csv"]).read_bytes(), file_name="top100_risky_cells.csv")
-            with colC:
-                st.download_button("🧾 Forensic JSON", Path(res["forensic_json"]).read_bytes(), file_name="forensic_log.json")
-        else:
-            st.info("Forensic rapor üretimi atlandı veya başarısız.")
+        # ======================
+        # SHAP Analizi (özellik önem sırası)
+        # ======================
+        try:
+            explainer = shap.TreeExplainer(base_clf)
+            # Not: sample alarak görselleştirme daha hızlı olur
+            sample_X = X_occ.sample(min(1000, len(X_occ)), random_state=42)
+            shap_values = explainer.shap_values(sample_X)
+            fig = plt.figure(figsize=(7, 5))
+            shap.summary_plot(shap_values[1], sample_X, plot_type="bar", show=False)
+            st.pyplot(fig)
+            st.info("Özellik önem grafiği (SHAP) gösterildi.")
+        except Exception as e:
+            st.warning(f"SHAP analizi yapılamadı: {e}")
 
-        # -------------------------------
-        # Global — Sınıf (var/yok)
-        # -------------------------------
-        with tabs[0]:
-            st.caption("Pozitif sınıf (Y>0) için ortalama mutlak SHAP — ilk 10")
-            mean_abs = np.abs(shap_pos).mean(axis=0)
-            top_idx = np.argsort(mean_abs)[::-1][:10]
-            top_feat = X_occ.columns[top_idx]
-            top_vals = mean_abs[top_idx]
-            top_df = pd.DataFrame({"özellik": top_feat, "önem(Mean|SHAP|)": top_vals})
-            st.dataframe(top_df, use_container_width=True)
-            st.bar_chart(top_df.set_index("özellik"))
+        # ======================
+        # Tahminleri kaydet (CSV + Parquet + ZIP)
+        # ======================
+        try:
+            outs_pred = write_df(df09, DATA_DIR / "sf_crime_09_with_preds")
+            st.success(
+                f"✔ Tahminli dosyalar kaydedildi: "
+                f"{outs_pred['csv'].name}, {outs_pred['parquet'].name}, {outs_pred['zip'].name}"
+            )
+        except Exception as e:
+            st.warning(f"Tahminli dosyalar kaydedilemedi: {e}")
 
-            cat_col2 = "category_grouped" if "category_grouped" in df09.columns else (
-                       "subcategory_grouped" if "subcategory_grouped" in df09.columns else None)
-            if cat_col2:
-                col1, col2 = st.columns(2)
-                with col1:
-                    pick1 = st.selectbox("Sınıf 1 (ör. Theft)", sorted(df09[cat_col2].dropna().unique()))
-                with col2:
-                    pick2 = st.selectbox("Sınıf 2 (ör. Assault)", sorted(df09[cat_col2].dropna().unique()))
-                for pick in [pick1, pick2]:
-                    sub_idx = df09.loc[sample_idx][df09.loc[sample_idx, cat_col2] == pick].index
-                    if len(sub_idx) >= 20:
-                        shap_sub = expl_clf.shap_values(X_occ.loc[sub_idx])
-                        shap_sub_pos = shap_sub[1] if isinstance(shap_sub, list) else shap_sub
-                        mabs = np.abs(shap_sub_pos).mean(axis=0)
-                        top_idx2 = np.argsort(mabs)[::-1][:10]
-                        top_df2 = pd.DataFrame({
-                            "özellik": X_occ.columns[top_idx2],
-                            f"{pick} için önem": mabs[top_idx2]
-                        })
-                        st.markdown(f"**{pick} — ilk 10 etken**")
-                        st.dataframe(top_df2, use_container_width=True)
-                    else:
-                        st.info(f"{pick} için yeterli örnek yok (≥20 önerilir).")
-
-        # -------------------------------
-        # Global — Sayı (kuantil)
-        # -------------------------------
-        with tabs[1]:
-            if 0.5 in q_models:
-                st.caption("Kuantil (q=0.5) LightGBMRegressor için SHAP — ilk 10")
-                expl_reg = shap.TreeExplainer(q_models[0.5])
-                sample_idx_reg = X_cnt.sample(min(1500, len(X_cnt)), random_state=42).index
-                shap_vals_reg = expl_reg.shap_values(X_cnt.loc[sample_idx_reg])
-                mean_abs_r = np.abs(shap_vals_reg).mean(axis=0)
-                top_idx_r = np.argsort(mean_abs_r)[::-1][:10]
-                top_df_r = pd.DataFrame({
-                    "özellik": X_cnt.columns[top_idx_r],
-                    "önem(Mean|SHAP|)": mean_abs_r[top_idx_r]
-                })
-                st.dataframe(top_df_r, use_container_width=True)
-                st.bar_chart(top_df_r.set_index("özellik"))
-            else:
-                st.info("Kuantil regresyon modeli bulunamadı.")
-
-        # -------------------------------
-        # Local — tek satır
-        # -------------------------------
-        with tabs[2]:
-            st.caption("Seçilen satır için olasılık ve katkılar")
-            idx = st.number_input("Satır indexi", min_value=0, max_value=int(len(X_all)-1), value=0, step=1)
-            x_row = X_all.iloc[[idx]]
-            p_row = float(clf.predict_proba(x_row)[:,1])
-            exp_row = float(df09.loc[x_row.index, "pred_expected"]) if "pred_expected" in df09.columns else np.nan
-            st.write(f"**P(Y>0)** = {p_row:.3f}  |  **Beklenen sayı** ≈ {exp_row:.2f}")
-            shap_row = expl_clf.shap_values(x_row)
-            shap_row_pos = shap_row[1][0] if isinstance(shap_row, list) else shap_row[0]
-            contrib = pd.DataFrame({
-                "özellik": x_row.columns,
-                "değer": x_row.iloc[0].values,
-                "katkı(SHAP)": shap_row_pos
-            }).sort_values("katkı(SHAP)", key=np.abs, ascending=False).head(15)
-            st.dataframe(contrib, use_container_width=True)
-
-        # -------------------------------
-        # PDP / ICE
-        # -------------------------------
-        with tabs[3]:
-            st.caption("PDP (Sınıf modeli, target=1)")
-            candidates = [c for c in ["event_hour","nei_7d_sum","nr_7d","bus_stop_count","poi_risk_score"] if c in X_occ.columns]
-            feats = st.multiselect("PDP özellik(ler)i", options=candidates, default=candidates[:2])
-            if len(feats) > 0:
-                for f in feats[:3]:
-                    fig, ax = plt.subplots(figsize=(5, 3))
-                    PartialDependenceDisplay.from_estimator(
-                        clf_tree, X_occ, [f], kind="average", target=1, ax=ax
-                    )
-                    ax.set_title(f"PDP — {f}")
-                    st.pyplot(fig, clear_figure=True)
-            else:
-                st.info("Listeden en az bir özellik seç.")
-
-        with tabs[4]:
-            st.caption("İki sınıf için özet kart (global SHAP top-5)")
-            if cat_col:
-                pick_a = st.selectbox("Kart A sınıfı", sorted(df09[cat_col].dropna().unique()), key="cardA")
-                pick_b = st.selectbox("Kart B sınıfı", sorted(df09[cat_col].dropna().unique()), key="cardB")
-                def _topk_for_class(pick, k=5):
-                    sub_idx = df09.loc[sample_idx][df09.loc[sample_idx, cat_col] == pick].index
-                    if len(sub_idx) < 20:
-                        return pd.DataFrame({"özellik": [], "önem": []})
-                    shap_sub = expl_clf.shap_values(X_occ.loc[sub_idx])
-                    shap_sub_pos = shap_sub[1] if isinstance(shap_sub, list) else shap_sub
-                    mabs = np.abs(shap_sub_pos).mean(axis=0)
-                    top = np.argsort(mabs)[::-1][:k]
-                    return pd.DataFrame({"özellik": X_occ.columns[top], "önem": mabs[top]})
-                colA, colB = st.columns(2)
-                with colA:
-                    st.markdown(f"**{pick_a} — Top 5 etken**")
-                    st.dataframe(_topk_for_class(pick_a), use_container_width=True)
-                with colB:
-                    st.markdown(f"**{pick_b} — Top 5 etken**")
-                    st.dataframe(_topk_for_class(pick_b), use_container_width=True)
-            else:
-                st.info("category_grouped / subcategory_grouped yoksa sınıf kartları oluşturulamaz.")
+        # ======================
+        # Kısa özet
+        # ======================
+        st.markdown("### 📊 Model Özeti")
+        st.write({
+            "ROC AUC": float(roc_auc_score(y_occ.iloc[test_idx], p_hat)),
+            "Brier": float(brier_score_loss(y_occ.iloc[test_idx], p_hat)),
+            "MAE (sayım)": float(mean_absolute_error(y_cnt_test, y_hat_cnt)),
+            "Örnek sayısı": len(df09)
+        })
+        st.success("🏁 Model eğitimi tamamlandı.")
