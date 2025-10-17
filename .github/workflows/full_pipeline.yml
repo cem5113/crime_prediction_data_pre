@@ -280,31 +280,29 @@ jobs:
             echo "❌ sf_crime_02.* / sf_crime.* da yok; 03 üretilemedi"; exit 2
           fi
           ls -lah "${CRIME_DATA_DIR}"/sf_crime_03.*
-
-      # ---- GİRDİ SEÇİCİ YARDIMCI (bus/train/... için kullanılacak) ----
+          
       - name: Helper — pick_input function
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         shell: bash
         run: |
           cat > pick_input.sh <<'BASH'
           #!/usr/bin/env bash
-          # usage: pick_input OUT_ENV_NAME CAND1 [CAND2 ...]
-          # Argüman yoksa (ör. yanlışlıkla source edilirse) sessizce çık:
-          if [ "$#" -lt 2 ]; then
-            return 0 2>/dev/null || exit 0
-          fi
-          set -euo pipefail
-          out="$1"; shift
-          for p in "$@"; do
-            if [ -f "$p" ]; then
-              echo "✔ Found input: $p"
-              export "${out}"="$p"
-              echo "${out}=$p"
-              exit 0
-            fi
-          done
-          echo "✖ Input not found among candidates:" "$@" 1>&2
-          exit 1
+          # usage: pick_input VAR CAND1 [CAND2 ...]
+          pick_input() {
+            local out="$1"; shift
+            local p
+            for p in "$@"; do
+              if [ -f "$p" ]; then
+                echo "✔ Found input: $p"
+                # Değişkeni aynı shell'de set et
+                printf -v "$out" "%s" "$p"
+                export "$out"
+                return 0
+              fi
+            done
+            echo "✖ Input not found among candidates: $*" >&2
+            return 1
+          }
           BASH
           chmod +x pick_input.sh
 
@@ -317,18 +315,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          . ./pick_input.sh CRIME_INPUT \
+          source ./pick_input.sh
+          pick_input CRIME_INPUT \
             "${CRIME_DATA_DIR}/sf_crime_03.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_03.csv" \
             "${CRIME_DATA_DIR}/sf_crime.parquet" \
             "${CRIME_DATA_DIR}/sf_crime.csv" || { echo "❌ Bus adımı için girdi yok"; exit 2; }
-          eval "$(./pick_input.sh CRIME_INPUT "${CRIME_DATA_DIR}/sf_crime_03.parquet" ... )"
           echo "CRIME_INPUT=$CRIME_INPUT"
           python -u update_bus.py
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_04.parquet"
           OUT_CSV="${CRIME_DATA_DIR}/sf_crime_04.csv"
           test -f "$OUT_PARQ" -o -f "$OUT_CSV" || { echo "❌ Bus çıktısı yok (sf_crime_04.*)"; exit 2; }
-
       - name: 06) Tren (BART) → sf_crime_05.parquet
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
@@ -338,12 +335,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./pick_input.sh CRIME_INPUT \
+          source ./pick_input.sh
+          pick_input CRIME_INPUT \
             "${CRIME_DATA_DIR}/sf_crime_04.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_04.csv" \
             "${CRIME_DATA_DIR}/sf_crime_03.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_03.csv" || { echo "❌ Tren adımı için girdi yok"; exit 2; }
-          export CRIME_INPUT
           echo "CRIME_INPUT=$CRIME_INPUT"
           python -u update_train.py
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_05.parquet"
@@ -359,12 +356,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./pick_input.sh CRIME_INPUT \
+          source ./pick_input.sh
+          pick_input CRIME_INPUT \
             "${CRIME_DATA_DIR}/sf_crime_05.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_05.csv" \
             "${CRIME_DATA_DIR}/sf_crime_04.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_04.csv" || { echo "❌ POI adımı için girdi yok"; exit 2; }
-          export CRIME_INPUT
           echo "CRIME_INPUT=$CRIME_INPUT"
           if [ -f update_poi.py ]; then python -u update_poi.py;
           elif [ -f pipeline_make_sf_crime_06.py ]; then python -u pipeline_make_sf_crime_06.py;
@@ -382,12 +379,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./pick_input.sh CRIME_INPUT \
+          source ./pick_input.sh
+          pick_input CRIME_INPUT \
             "${CRIME_DATA_DIR}/sf_crime_06.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_06.csv" \
             "${CRIME_DATA_DIR}/sf_crime_05.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_05.csv" || { echo "❌ Polis/Gov adımı için girdi yok"; exit 2; }
-          export CRIME_INPUT
           echo "CRIME_INPUT=$CRIME_INPUT"
           if [ -f update_police_gov.py ]; then python -u update_police_gov.py;
           elif [ -f scripts/enrich_police_gov_06_to_07.py ]; then python -u scripts/enrich_police_gov_06_to_07.py;
@@ -405,12 +402,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./pick_input.sh CRIME_INPUT \
+          source ./pick_input.sh
+          pick_input CRIME_INPUT \
             "${CRIME_DATA_DIR}/sf_crime_07.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_07.csv" \
             "${CRIME_DATA_DIR}/sf_crime_06.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_06.csv" || { echo "❌ Weather adımı için girdi yok"; exit 2; }
-          export CRIME_INPUT
           echo "CRIME_INPUT=$CRIME_INPUT"
           if [ -f update_weather.py ]; then python -u update_weather.py;
           elif [ -f scripts/update_weather.py ]; then python -u scripts/update_weather.py;
