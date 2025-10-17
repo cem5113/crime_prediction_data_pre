@@ -1016,11 +1016,13 @@ with st.sidebar:
             os.environ["POPULATION_PATH"] = pop_url_in or str(POPULATION_PATH)
 
     with st.sidebar.expander("Workflow ayarları", True):
-        # Dosya adı (path) veya workflow 'name' ya da ID kabul ediyor
         wf_default = os.environ.get("GITHUB_WORKFLOW", "full_pipeline.yml")
-        wf_selector = st.text_input("Workflow (ad / path / id)", value=wf_default, help="Örn: full_pipeline.yml veya 'Full SF Crime Pipeline'")
+        wf_selector = st.text_input(
+            "Workflow (ad / path / id)",
+            value=wf_default,
+            help="Örn: full_pipeline.yml veya 'Full SF Crime Pipeline'"
+        )
     
-        # Hangi branche dispatch edilecek?
         ref_default = os.environ.get("GITHUB_REF_NAME", "main")
         ref_branch = st.text_input("Ref/branch", value=ref_default)
 
