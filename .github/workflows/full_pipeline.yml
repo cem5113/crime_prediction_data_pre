@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CRIME_DATA_DIR: crime_prediction_data
+  CRIME_DATA_DIR: crime_prediction_data_pre
   GEOID_LEN: "11"
   BACKFILL_DAYS: "0"
   SF_SODA_FETCH_STRATEGY: ${{ vars.SF_SODA_FETCH_STRATEGY || 'bulk' }}
@@ -58,7 +58,7 @@ jobs:
           git lfs install
           git lfs pull
           echo "Repo root:"; ls -lah
-          echo "crime_prediction_data:"; ls -lah crime_prediction_data || true
+          echo "crime_prediction_data_pre:"; ls -lah crime_prediction_data_pre || true
           echo "CRIME_DATA_DIR:"; ls -lah "${CRIME_DATA_DIR}" || true
 
       - name: Ensure data dir
@@ -142,7 +142,7 @@ jobs:
           ARTIFACT_NAME: sf-crime-pipeline-output
           WORKFLOW_NAME: Full SF Crime Pipeline
           TARGET_FILE: sf_crime_y.csv
-          OUT_DIR: crime_prediction_data
+          OUT_DIR: crime_prediction_data_pre
         run: |
           set -euo pipefail
           mkdir -p "${OUT_DIR}"
@@ -213,7 +213,7 @@ jobs:
           ARTIFACT_NAME: sf-crime-pipeline-output
           WORKFLOW_NAME: Full SF Crime Pipeline
           TARGET_FILE: sf_911_last_5_year_y.csv
-          OUT_DIR: crime_prediction_data
+          OUT_DIR: crime_prediction_data_pre
         run: |
           set -euo pipefail
           mkdir -p "${OUT_DIR}"
@@ -285,7 +285,7 @@ jobs:
           ARTIFACT_NAME: sf-crime-pipeline-output
           WORKFLOW_NAME: Full SF Crime Pipeline
           TARGET_FILE: sf_311_last_5_years_y.csv
-          OUT_DIR: crime_prediction_data
+          OUT_DIR: crime_prediction_data_pre
         run: |
           set -euo pipefail
           mkdir -p "${OUT_DIR}"
@@ -477,7 +477,7 @@ jobs:
           # 1) Varsa repodan kopyala
           for p in \
             "${CRIME_DATA_DIR}/neighbors.csv" \
-            "crime_prediction_data/neighbors.csv" \
+            "crime_prediction_data_pre/neighbors.csv" \
             "neighbors.csv" "data/neighbors.csv" "inputs/neighbors.csv"
           do
             if [ -f "$p" ]; then
@@ -559,7 +559,7 @@ jobs:
           except Exception:
               gpd = None
           
-          CRIME_DIR = Path(os.environ.get("CRIME_DATA_DIR","crime_prediction_data"))
+          CRIME_DIR = Path(os.environ.get("CRIME_DATA_DIR","crime_prediction_data_pre"))
           GEOID_LEN = int(os.environ.get("GEOID_LEN","11"))
           STRATEGY = os.environ.get("NEIGHBOR_STRATEGY","queen").lower()
           MIN_DEG = int(os.environ.get("MIN_NEIGHBOR_DEG","3"))
