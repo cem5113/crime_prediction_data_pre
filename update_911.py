@@ -122,8 +122,8 @@ SF911_RECENT_HOURS = int(os.getenv("SF911_RECENT_HOURS", "6"))
 RAW_911_URL_ENV = os.getenv("RAW_911_URL", "").strip()
 RAW_911_URL_CANDIDATES = [
     RAW_911_URL_ENV or "",
-    "https://github.com/cem5113/crime_prediction_data/releases/download/v1.0.1/sf_911_last_5_year_y.csv",
-    "https://github.com/cem5113/crime_prediction_data/releases/download/v1.0.1/sf_911_last_5_year.csv",
+    "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.0/sf_911_last_5_year_y.csv",
+    "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.0/sf_911_last_5_year.csv",
 ]
 
 def _pick_working_release_url(candidates: list[str]) -> str:
@@ -190,7 +190,7 @@ def try_small_request(params, headers):
 def _load_blocks() -> tuple[gpd.GeoDataFrame, int]:
     census_path = next((p for p in CENSUS_CANDIDATES if p.exists()), None)
     if census_path is None:
-        raise FileNotFoundError("❌ Nüfus blokları GeoJSON yok (crime_prediction_data/ veya kök).")
+        raise FileNotFoundError("❌ Nüfus blokları GeoJSON yok (crime_prediction_data_pre/ veya kök).")
     gdf_blocks = gpd.read_file(census_path)
     if "GEOID" not in gdf_blocks.columns:
         cand = [c for c in gdf_blocks.columns if str(c).upper().startswith("GEOID")]
@@ -689,7 +689,7 @@ if _neighbor_roll is not None:
 
 crime_grid_path = next((p for p in CRIME_GRID_CANDIDATES if p.exists()), None)
 if crime_grid_path is None:
-    raise FileNotFoundError("❌ Suç grid yok: crime_prediction_data/sf_crime_grid_full_labeled.csv (veya kökte).")
+    raise FileNotFoundError("❌ Suç grid yok: crime_prediction_data_pre/sf_crime_grid_full_labeled.csv (veya kökte).")
 crime = pd.read_csv(crime_grid_path, dtype={"GEOID": str}, low_memory=False)
 log(f"📥 Suç grid yüklendi: {len(crime)} satır ({crime_grid_path})")
 log_shape(crime, "CRIME grid — ham")
