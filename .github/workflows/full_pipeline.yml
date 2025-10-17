@@ -100,52 +100,51 @@ jobs:
             base/"sf_crime_y.csv",
             base/"sf_crime_54.csv",
           ]
-          made = []
           for csv in targets:
             if csv.exists():
               pq = csv.with_suffix(".parquet")
               try:
                 df = pd.read_csv(csv, low_memory=False)
                 df.to_parquet(pq, index=False)
-                made.append(str(pq))
+                print(f"✅ Parquet: {pq}")
               except Exception as e:
                 print(f"⚠️ Parquet üretilemedi: {csv} -> {e}")
-          print("✅ Parquet oluşturulan dosyalar:", *made, sep="\n- " if made else "\n- (yok)")
           PY
 
-      - name: Commit outputs if requested
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'commit' }}
+      - name: Collect outputs for artifact
+        env:
+          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add \
-            sf_crime_y.csv sf_crime_y.parquet sf_crime_54.csv sf_crime_54.parquet 2>/dev/null || true
-          git add \
-            "${CRIME_DATA_DIR}/sf_crime_y.csv" "${CRIME_DATA_DIR}/sf_crime_y.parquet" \
-            "${CRIME_DATA_DIR}/sf_crime_54.csv" "${CRIME_DATA_DIR}/sf_crime_54.parquet" 2>/dev/null || true
-          if git diff --cached --quiet; then
-            echo "ℹ️ Commitlenecek değişiklik yok."
-          else
-            git commit -m "chore(pipeline): update sf_crime_y & sf_crime_54 (CSV+Parquet)"
-            git push
+          mkdir -p _artifacts
+          # Kök dizin
+          for f in sf_crime.csv sf_crime_y.csv sf_crime_y.parquet sf_crime_54.csv sf_crime_54.parquet; do
+            [ -f "$f" ] && cp -f "$f" _artifacts/ && echo "✔ root -> _artifacts/$f"
+          done
+          # CRIME_DATA_DIR altı
+          for f in sf_crime.csv sf_crime_y.csv sf_crime_y.parquet sf_crime_54.csv sf_crime_54.parquet; do
+            if [ -f "${CRIME_DATA_DIR}/$f" ]; then
+              mkdir -p "_artifacts/${CRIME_DATA_DIR}"
+              cp -f "${CRIME_DATA_DIR}/$f" "_artifacts/${CRIME_DATA_DIR}/"
+              echo "✔ ${CRIME_DATA_DIR}/$f -> _artifacts/${CRIME_DATA_DIR}/$f"
+            fi
+          done
+
+          echo "📦 İçerik:"
+          ls -lah _artifacts || true
+
+          # Hiçbir dosya toplanamadıysa fail verelim:
+          if [ -z "$(find _artifacts -type f -maxdepth 2 2>/dev/null)" ]; then
+            echo "❌ Yüklenecek dosya bulunamadı. Scriptler dosyaları üretiyor mu ve doğru klasöre yazıyor mu?"
+            exit 3
           fi
 
-      - name: Upload artifact (sf_crime*.{csv,parquet})
+      - name: Upload artifact (collected)
         if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'artifact') }}
         uses: actions/upload-artifact@v4
         with:
           name: sf-crime-output
-          path: |
-            sf_crime.csv
-            sf_crime_y.csv
-            sf_crime_y.parquet
-            sf_crime_54.csv
-            sf_crime_54.parquet
-            ${{ env.CRIME_DATA_DIR }}/sf_crime.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_y.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_y.parquet
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_54.csv
-            ${{ env.CRIME_DATA_DIR }}/sf_crime_54.parquet
-          if-no-files-found: ignore
+          path: _artifacts
+          if-no-files-found: error
           retention-days: 14
+
