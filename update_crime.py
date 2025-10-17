@@ -44,7 +44,7 @@ NEIGHBOR_RADIUS_M = float(os.getenv("NEIGHBOR_RADIUS_M", "500"))
 # ➜ İstediğin akış: 1) Artifact'tan sf_crime_y.csv, 2) releases/latest sf_crime.csv
 CRIME_BASE_URL = os.getenv(
     "CRIME_CSV_URL",
-    "https://github.com/cem5113/crime_prediction_data/releases/latest/download/sf_crime.csv"  # Fallback
+    "https://github.com/cem5113/crime_prediction_data_pre/releases/latest/download/sf_crime.csv"  # Fallback
 )
 CRIME_API_URL = os.getenv("CRIME_API_URL", "https://data.sfgov.org/resource/wg3w-h783.json")
 SFCRIME_APP_TOKEN = os.getenv("SFCRIME_API_TOKEN", "")
@@ -60,7 +60,7 @@ csv_path   = os.path.join(save_dir, "sf_crime.csv")
 sum_path   = os.path.join(save_dir, "sf_crime_grid_summary_labeled.csv")
 full_path  = os.path.join(save_dir, "sf_crime_grid_full_labeled.csv")
 blocks_path = os.path.join(save_dir, "sf_census_blocks_with_population.geojson")
-CATMAP_PATH = Path(os.getenv("CATEGORY_MAP_PATH", "crime_prediction_data/category_map.json"))
+CATMAP_PATH = Path(os.getenv("CATEGORY_MAP_PATH", "crime_prediction_data_pre/category_map.json"))
 DAILY_OUT_BASE = os.getenv("DAILY_OUT_BASE", "sf_crime_grid_daily_labels.parquet")
 DAILY_PARTITION = True
 USE_PARQUET = True
@@ -71,7 +71,7 @@ Y_CSV_NAME = os.getenv("Y_CSV_NAME", "sf_crime_y.csv")
 y_csv_path = os.path.join(save_dir, Y_CSV_NAME)
 
 # ---- GitHub Actions artifact (sf_crime_y.csv) ayarları ----
-GITHUB_REPO = os.getenv("GITHUB_REPO", "cem5113/crime_prediction_data")   # owner/repo
+GITHUB_REPO = os.getenv("GITHUB_REPO", "cem5113/crime_prediction_data_pre")   # owner/repo
 GH_TOKEN = os.getenv("GH_TOKEN", "")
 ARTIFACT_NAME = os.getenv("ARTIFACT_NAME", "sf-crime-pipeline-output")
 
@@ -188,9 +188,9 @@ def fetch_file_from_latest_artifact(pick_names: List[str], artifact_name: str = 
                     import zipfile, io as _io
                     zf = zipfile.ZipFile(_io.BytesIO(dl.content))
                     names = zf.namelist()
-                    # tam ad + crime_prediction_data/ altı için dene
+                    # tam ad + crime_prediction_data_pre/ altı için dene
                     for pick in pick_names:
-                        for c in (pick, f"crime_prediction_data/{pick}"):
+                        for c in (pick, f"crime_prediction_data_pre/{pick}"):
                             if c in names:
                                 return zf.read(c)
                     # suffix eşleşmesi
@@ -213,7 +213,7 @@ def ensure_local_base_csv() -> Path | None:
     """
     # 1) Önce Y tabanını dene
     y_candidates = [
-        Path("crime_prediction_data/sf_crime_y.csv"),
+        Path("crime_prediction_data_pre/sf_crime_y.csv"),
         Path("sf_crime_y.csv"),
         Path("outputs/sf_crime_y.csv"),
     ]
@@ -228,8 +228,8 @@ def ensure_local_base_csv() -> Path | None:
     # 2) Klasik sf_crime.{csv,csv.gz}
     candidates = [
         Path("sf_crime.csv"),
-        Path("crime_prediction_data/sf_crime.csv"),
-        Path("crime_prediction_data/sf_crime.csv.gz"),
+        Path("crime_prediction_data_pre/sf_crime.csv"),
+        Path("crime_prediction_data_pre/sf_crime.csv.gz"),
     ]
     for p in candidates:
         if p.exists():
@@ -243,8 +243,8 @@ def ensure_local_base_csv() -> Path | None:
         print("⚠️ Ne local base var ne de CRIME_CSV_URL ayarlı.")
         return None
     try:
-        Path("crime_prediction_data").mkdir(exist_ok=True)
-        out = Path("crime_prediction_data/sf_crime.csv.gz") if CRIME_BASE_URL.endswith(".gz") else Path("crime_prediction_data/sf_crime.csv")
+        Path("crime_prediction_data_pre").mkdir(exist_ok=True)
+        out = Path("crime_prediction_data_pre/sf_crime.csv.gz") if CRIME_BASE_URL.endswith(".gz") else Path("crime_prediction_data_pre/sf_crime.csv")
         print(f"⬇️ Release fallback indiriliyor → {out.name}")
         r = requests.get(CRIME_BASE_URL, timeout=60)
         r.raise_for_status()
@@ -261,37 +261,18 @@ def read_existing_crime_csv(p: Path) -> pd.DataFrame | None:
     try:
         compression = "gzip" if p.suffix == ".gz" else None
         df = pd.read_csv(p, dtype={"GEOID": str}, low_memory=False, compression=compression)
-        
-        def _parse_date_col(s: pd.Series) -> pd.Series:
-            # Önce standart dene
-            dt = pd.to_datetime(s, errors="coerce", utc=False)
-            # Eğer tamamen NaT geldiyse ve orijinal numerikse → Excel seri tarihi deneyelim
-            if dt.isna().all() and pd.api.types.is_numeric_dtype(s):
-                # Excel origin
-                dt = pd.to_datetime(s, unit="D", origin="1899-12-30", errors="coerce")
-            return dt  # datetime64[ns]
-        
         if "date" in df.columns:
-            dt = _parse_date_col(df["date"])
+            df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
         elif "datetime" in df.columns:
-            dt = _parse_date_col(df["datetime"])
+            df["date"] = pd.to_datetime(df["datetime"], errors="coerce").dt.date
         else:
             raise ValueError("CSV içinde 'date' veya 'datetime' sütunu yok.")
-        
-        # Geçersizleri at ve datetime64 olarak sakla (⚠️ .dt.date kullanmıyoruz)
-        df = df.loc[dt.notna()].copy()
-        df["date"] = dt.dt.normalize()  # sadece tarih kısmı ama dtype datetime64[ns]
-        
         if "id" in df.columns:
             df["id"] = df["id"].astype(str)
         if "GEOID" in df.columns:
             df["GEOID"] = df["GEOID"].astype(str)
-        
-        last_date = df["date"].max()
-        last_date_str = last_date.date().isoformat() if pd.notna(last_date) else "NaN"
-        print(f"📂 Mevcut veri yüklendi: {len(df)} satır (son tarih: {last_date_str})")
+        print(f"\U0001F4C2 Mevcut veri yüklendi: {len(df)} satır (son tarih: {df['date'].max()})")
         return df
-
     except Exception as e:
         print(f"\u26A0\ufe0f Mevcut sf_crime okunamadı: {e}")
         return None
@@ -455,7 +436,7 @@ if raw_new is not None and not raw_new.empty:
     # UTC→SF
     df_new["datetime"] = pd.to_datetime(df_new["incident_datetime"], utc=True, errors="coerce").dt.tz_convert(SF_TZ)
     # yerel tarih/saat
-    df_new["date"] = df_new["datetime"].dt.normalize()
+    df_new["date"] = df_new["datetime"].dt.date
     df_new["time"] = df_new["datetime"].dt.strftime("%H:%M:%S")
     df_new["event_hour"] = df_new["datetime"].dt.hour
     # id
@@ -507,7 +488,7 @@ if "time" not in df_old.columns:
     df_old["time"] = "00:00:00"
 _before_merge = df_old.shape
 if "date" in df_old.columns:
-    df_old["date"] = pd.to_datetime(df_old["date"], errors="coerce").dt.normalize()
+    df_old["date"] = pd.to_datetime(df_old["date"], errors="coerce").dt.date
 
 if FORCE_FULL and (raw_new is not None) and (not raw_new.empty):
     df_all = df_new.copy()
@@ -520,27 +501,12 @@ if "GEOID" in df_all.columns:
     df_all["GEOID"] = df_all["GEOID"].astype(str).str.extract(r"(\d+)")[0].str[:DEFAULT_GEOID_LEN]
 
 # 5y pencere + datetime
-start_date_5y = pd.Timestamp(today - timedelta(days=5*365)).normalize()
-
-# 1) 'date' garanti olsun
-df_all["date"] = pd.to_datetime(df_all["date"], errors="coerce").dt.normalize()
-
-# 2) Geçersiz tarihleri at
-df_all = df_all.dropna(subset=["date"])
-
-# 3) Karşılaştırmayı datetime64 vs Timestamp yap
+start_date_5y = today - timedelta(days=5*365)
 df_all = df_all[df_all["date"] >= start_date_5y]
 
-# 4) Saat sütunu ve datetime birleştirme
-df_all["time"] = df_all["time"].fillna("00:00:00").astype(str)
-df_all["time"] = df_all["time"].replace(
-    {"nan": "00:00:00", "NaN": "00:00:00", "None": "00:00:00", "": "00:00:00"}
-).str.strip()
-
-df_all["datetime"] = pd.to_datetime(
-    df_all["date"].dt.strftime("%Y-%m-%d") + " " + df_all["time"],
-    errors="coerce"
-)
+df_all["date"] = pd.to_datetime(df_all["date"], errors="coerce")
+df_all["time"] = df_all["time"].astype(str).fillna("00:00:00")
+df_all["datetime"] = pd.to_datetime(df_all["date"].dt.strftime("%Y-%m-%d") + " " + df_all["time"], errors="coerce")
 df_all = df_all.dropna(subset=["datetime"]).copy()
 df_all["datetime"] = df_all["datetime"].dt.floor("h")
 
@@ -597,13 +563,13 @@ try:
 except Exception:
     pass
 
-# crime_prediction_data/ kopyaları:
+# crime_prediction_data_pre/ kopyaları:
 try:
-    Path("crime_prediction_data").mkdir(exist_ok=True)
+    Path("crime_prediction_data_pre").mkdir(exist_ok=True)
     if CACHE_WRITE_Y_ONLY:
-        shutil.copy2(_out_target, "crime_prediction_data/sf_crime_y.csv")
+        shutil.copy2(_out_target, "crime_prediction_data_pre/sf_crime_y.csv")
     else:
-        shutil.copy2(_out_target, "crime_prediction_data/sf_crime.csv")
+        shutil.copy2(_out_target, "crime_prediction_data_pre/sf_crime.csv")
 except Exception as e:
     print("Kopya uyarısı:", e)
 
@@ -722,7 +688,7 @@ if gdf_blocks is not None:
         if NEIGHBOR_METHOD == "touches":
             left  = tracts.rename(columns={"GEOID":"G1"})
             right = tracts.rename(columns={"GEOID":"G2"})
-            sj = gpd.sjoin(left, right, how="left", predicate="touches")
+            sj = gpd.sjoin(left, right, how="left", predicate="intersects")
             sj = sj[sj["G1"] != sj["G2"]].copy()
             neighbors = sj[["G1","G2"]].drop_duplicates()
         else:
@@ -794,9 +760,9 @@ safe_save(grouped, sum_path)
 safe_save(df_final, full_path)
 print(f"\U0001F4BE Kaydedildi: {full_path}")
 try:
-    Path("crime_prediction_data").mkdir(exist_ok=True)
-    shutil.copy2(full_path, "crime_prediction_data/sf_crime_grid_full_labeled.csv")
-    print("\U0001F4E6 crime_prediction_data/ klasörüne GRID kopyalandı.")
+    Path("crime_prediction_data_pre").mkdir(exist_ok=True)
+    shutil.copy2(full_path, "crime_prediction_data_pre/sf_crime_grid_full_labeled.csv")
+    print("\U0001F4E6 crime_prediction_data_pre/ klasörüne GRID kopyalandı.")
 except Exception as e:
     print(f"\u26A0\ufe0f GRID kopyalama uyarısı: {e}")
 
@@ -923,24 +889,24 @@ if WRITE_DAILY_ARCHIVE:
                 written_rows += len(part)
         print(f"✅ Günlük arşiv üretimi tamam. Toplam yazılan satır: {written_rows:,}")
         try:
-            Path("crime_prediction_data").mkdir(exist_ok=True)
+            Path("crime_prediction_data_pre").mkdir(exist_ok=True)
             base = Path(DAILY_OUT_BASE)
             src_dir = base.parent / base.stem
             if src_dir.exists():
-                dst_dir = Path("crime_prediction_data/daily_parquet" if (USE_PARQUET and DAILY_PARTITION) else "crime_prediction_data/daily_csv")
+                dst_dir = Path("crime_prediction_data_pre/daily_parquet" if (USE_PARQUET and DAILY_PARTITION) else "crime_prediction_data_pre/daily_csv")
                 shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
-                print("\U0001F4E6 crime_prediction_data/ klasörüne günlük arşiv kopyalandı.")
+                print("\U0001F4E6 crime_prediction_data_pre/ klasörüne günlük arşiv kopyalandı.")
         except Exception as e:
             print(f"\u26A0\ufe0f Günlük arşiv kopyalama uyarısı: {e}")
 
 # Blok dosyasını kopyala
 try:
-    Path("crime_prediction_data").mkdir(exist_ok=True)
+    Path("crime_prediction_data_pre").mkdir(exist_ok=True)
     src_blocks = Path(blocks_path)
-    if src_blocks.exists(): shutil.copy2(src_blocks, Path("crime_prediction_data") / src_blocks.name)
-    print("\U0001F4E6 crime_prediction_data/ klasörüne gerekli kopyalar bırakıldı.")
+    if src_blocks.exists(): shutil.copy2(src_blocks, Path("crime_prediction_data_pre") / src_blocks.name)
+    print("\U0001F4E6 crime_prediction_data_pre/ klasörüne gerekli kopyalar bırakıldı.")
 except Exception as e:
-    print(f"\u26A0\ufe0f crime_prediction_data kopyalama uyarısı: {e}")
+    print(f"\u26A0\ufe0f crime_prediction_data_pre kopyalama uyarısı: {e}")
 
 # Son kontrol
 try:
