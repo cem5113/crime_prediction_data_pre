@@ -53,7 +53,7 @@ def save_atomic(df, path):
     os.replace(tmp, path)
 
 # ================== AYARLAR ==================
-SAVE_DIR = os.getenv("CRIME_DATA_DIR", "crime_prediction_data")
+SAVE_DIR = os.getenv("CRIME_DATA_DIR", "crime_prediction_data_pre")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 RAW_311_NAME_Y = os.getenv("RAW_311_NAME_Y", "sf_311_last_5_years_y.csv")
@@ -69,7 +69,7 @@ SOCRATA_APP_TOKEN = os.getenv("SOCS_APP_TOKEN", "").strip()
 GEOJSON_NAME = os.getenv("SF_BLOCKS_GEOJSON", "sf_census_blocks_with_population.geojson")
 GEOJSON_CANDIDATES = [
     os.path.join(SAVE_DIR, GEOJSON_NAME),
-    os.path.join("crime_prediction_data", GEOJSON_NAME),
+    os.path.join("crime_prediction_data_pre", GEOJSON_NAME),
     os.path.join(".", GEOJSON_NAME),
 ]
 
