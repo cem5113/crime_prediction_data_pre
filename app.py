@@ -200,10 +200,10 @@ def fetch_file_from_latest_artifact(pick_names: list[str], artifact_name="sf-cri
                         return zf.read(n)
     return None
 
-def dispatch_workflow(persist: str = "artifact", force: bool = True) -> dict:
+def dispatch_workflow() -> dict:
     import json as _json
     url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW}/dispatches"
-    payload = {"ref": "main", "inputs": {"persist": persist, "force": "true" if force else "false"}}
+    payload = {"ref": "main"}
     r = requests.post(url, headers=_gh_headers(), data=_json.dumps(payload), timeout=30)
     return {"ok": r.status_code in (204, 201), "status": r.status_code, "text": r.text}
 
@@ -934,7 +934,7 @@ with st.sidebar:
                 st.error("GH_TOKEN tanımlı değil.")
             else:
                 try:
-                    r = dispatch_workflow(persist=persist, force=force_bypass)
+                    r = dispatch_workflow
                     if r["ok"]:
                         st.success(f"Workflow tetiklendi (persist={persist}, force={force_bypass}).")
                     else:
