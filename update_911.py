@@ -83,7 +83,7 @@ def is_lfs_pointer_file(p: Path) -> bool:
 DEFAULT_GEOID_LEN = int(os.getenv("GEOID_LEN", "11"))
 
 # Çalışma dizini ENV ile yönetilebilir
-BASE_DIR = os.getenv("CRIME_DATA_DIR", "crime_prediction_data")
+BASE_DIR = os.getenv("CRIME_DATA_DIR", "crime_prediction_data_pre")
 Path(BASE_DIR).mkdir(parents=True, exist_ok=True)
 
 # 911 summary dosya adları
