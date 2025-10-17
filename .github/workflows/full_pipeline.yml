@@ -1,10 +1,9 @@
 # .github/workflows/full_pipeline.yml
-# .github/workflows/full_pipeline.yml
 name: Full SF Crime Pipeline
 
 on:
   schedule:
-    - cron: "0 14,15 * * *" # SF 07:00: 14:00 UTC (yaz), 15:00 UTC (kış)
+    - cron: "0 14,15 * * *" # SF 07:00 (yaz/kış)
   workflow_dispatch:
     inputs:
       persist:
@@ -30,6 +29,22 @@ concurrency:
 
 env:
   CRIME_DATA_DIR: crime_prediction_data
+  GEOID_LEN: "11"
+  BACKFILL_DAYS: "0"
+  SF_SODA_FETCH_STRATEGY: ${{ vars.SF_SODA_FETCH_STRATEGY || 'bulk' }}
+  SF_SODA_PAGE_LIMIT: ${{ vars.SF_SODA_PAGE_LIMIT || '50000' }}
+  SF_SODA_MAX_PAGES: ${{ vars.SF_SODA_MAX_PAGES || '100' }}
+  SF911_API_URL: ${{ vars.SF911_API_URL || 'https://data.sfgov.org/resource/2zdj-bwza.json' }}
+  SF911_AGENCY_FILTER: ${{ vars.SF911_AGENCY_FILTER || 'agency like "%Police%"' }}
+  SF911_API_TOKEN: ${{ secrets.SF911_API_TOKEN }}
+  SOCS_APP_TOKEN: ${{ secrets.SOCS_APP_TOKEN }}
+  PATROL_TOP_K: ${{ github.event.inputs.top_k || '50' }}
+  PATROL_HORIZON_DAYS: "3"
+  WX_LOCATION: "san francisco"
+  WX_UNIT: "us"
+  ACS_YEAR: ${{ vars.ACS_YEAR || 'LATEST' }}
+  DEMOG_WHITELIST: ${{ vars.DEMOG_WHITELIST || '' }}
+  CENSUS_GEO_LEVEL: ${{ vars.CENSUS_GEO_LEVEL || 'auto' }}
 
 jobs:
   run:
@@ -45,140 +60,444 @@ jobs:
           git lfs install
           git lfs pull
           echo "Repo root:"; ls -lah
-          echo "crime_prediction_data:"; ls -lah crime_prediction_data || true
-          echo "CRIME_DATA_DIR:"; ls -lah "${CRIME_DATA_DIR}" || true
+          echo "CRIME_DATA_DIR (${CRIME_DATA_DIR}):"; ls -lah "${CRIME_DATA_DIR}" || true
 
-      - name: System deps for geopandas/rtree
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libspatialindex-dev
+      - name: Ensure data dir
+        run: mkdir -p "${CRIME_DATA_DIR}"
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      # --- SF 07:00 kapısı ---
+      - name: Set runner timezone to America/Los_Angeles
+        uses: szenius/set-timezone@v2.0
         with:
-          python-version: "3.11"
-          cache: "pip"
+          timezoneLinux: "America/Los_Angeles"
 
-      - name: Install Python deps
+      - name: Gate by local SF time == 07 (bypassable)
+        id: gate
         run: |
-          python -m pip install -U pip wheel setuptools
-          pip install -U pandas numpy requests holidays pyarrow
-          pip install -U "geopandas==1.0.1" "shapely==2.0.4" "pyproj==3.6.1" "pyogrio==0.9.0" "rtree==1.3.0"
+          now="$(date)"
+          echo "RUN_LOCAL_TIME=$now" >> $GITHUB_ENV
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.force }}" = "true" ]; then
+            echo "proceed=true" >> $GITHUB_OUTPUT; exit 0; fi
+          if [ "$(date +%H)" = "07" ]; then echo "proceed=true" >> $GITHUB_OUTPUT; else echo "proceed=false" >> $GITHUB_OUTPUT; fi
 
-      - name: Run update_crime.py (produce sf_crime.csv & grid)
-        env:
-          # === ÖNEMLİ: Y-only modu KAPALI ===
-          CACHE_WRITE_Y_ONLY: "0"
-          # Kaynak CSV (raw):
-          CRIME_CSV_URL: "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_crime.csv"
-          # Artifact araması için token (varsa): GH_PAT yoksa GitHub token kullan
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
-          GITHUB_REPO: "cem5113/crime_prediction_data_pre"
-          GEOID_LEN: "11"
-          # İsteğe bağlı hız/akış ayarları (gerekirse aç)
-          SFCRIME_CHUNK_LIMIT: "50000"
-          SFCRIME_MAX_RETRIES: "4"
-          SFCRIME_SLEEP: "0.2"
-          SFCRIME_BULK_RANGE: "1"
+      # ---- PIPELINE (update_*.py ve üretimler) ----
+
+      - name: 01) Suç tabanı ve grid → sf_crime.csv + gridler
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
         run: |
           set -e
           python -u update_crime.py
-          echo "---- Çıktılar (root) ----"; ls -lah | sed -n '1,200p'
-          echo "---- Çıktılar (${CRIME_DATA_DIR}) ----"; ls -lah "${CRIME_DATA_DIR}" || true
 
-      - name: Quick sanity read (sf_crime.csv)
+      - name: Restore 911 summary cache
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CRIME_DATA_DIR }}/sf_911_last_5_year.csv
+          key: 911-${{ runner.os }}-${{ github.run_number }}
+          restore-keys: |
+            911-${{ runner.os }}-
+
+      - name: 02) 911 → sf_crime_01.csv (bulk 50k)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
-          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
+          SF_SODA_FETCH_STRATEGY: ${{ env.SF_SODA_FETCH_STRATEGY }}
+          SF_SODA_PAGE_LIMIT: ${{ env.SF_SODA_PAGE_LIMIT }}
+          SF_SODA_MAX_PAGES: ${{ env.SF_SODA_MAX_PAGES }}
+          SF911_API_URL: ${{ env.SF911_API_URL }}
+          SF911_AGENCY_FILTER: ${{ env.SF911_AGENCY_FILTER }}
+          SF911_API_TOKEN: ${{ env.SF911_API_TOKEN }}
+          SOCS_APP_TOKEN: ${{ env.SOCS_APP_TOKEN }}
+          BACKFILL_DAYS: ${{ env.BACKFILL_DAYS }}
+        run: |
+          set -e
+          python -u update_911.py
+
+      - name: Restore 311 summary cache
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CRIME_DATA_DIR }}/sf_311_last_5_years.csv
+          key: 311-${{ runner.os }}-${{ github.run_number }}
+          restore-keys: |
+            311-${{ runner.os }}-
+
+      - name: 03) 311 → sf_crime_02.csv (bulk 50k)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          SF_SODA_FETCH_STRATEGY: ${{ env.SF_SODA_FETCH_STRATEGY }}
+          SF_SODA_PAGE_LIMIT: ${{ env.SF_SODA_PAGE_LIMIT }}
+          SF_SODA_MAX_PAGES: ${{ env.SF_SODA_MAX_PAGES }}
+          SOCS_APP_TOKEN: ${{ env.SOCS_APP_TOKEN }}
+          BACKFILL_DAYS: ${{ env.BACKFILL_DAYS }}
+        run: |
+          set -e
+          if [ -f update_311.py ]; then
+            python -u update_311.py
+          else
+            python -u scripts/update_311.py
+          fi
+
+      - name: Ensure population CSV (local file)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
         run: |
           set -euo pipefail
+          mkdir -p "${CRIME_DATA_DIR}"
+          DEST="${CRIME_DATA_DIR}/sf_population.csv"
+          CANDIDATES=( "${CRIME_DATA_DIR}/sf_population.csv" "sf_population.csv" "data/sf_population.csv" "inputs/sf_population.csv" )
+          FOUND=""
+          for p in "${CANDIDATES[@]}"; do
+            if [ -f "$p" ]; then
+              if [ -e "$DEST" ] && [ "$p" -ef "$DEST" ]; then
+                echo "ℹ️ Zaten hedefte: $DEST"
+              else
+                cp -f "$p" "$DEST"
+                echo "✅ Copied: $p → $DEST"
+              fi
+              FOUND="yes"; break
+            fi
+          done
+          if [ -z "$FOUND" ]; then
+            echo "❌ sf_population.csv bulunamadı."; exit 2
+          fi
+          echo "---- sf_population.csv (head) ----"
+          head -n 5 "$DEST" || true
+
+      - name: (Opsiyonel) sf_population.csv başlık normalize
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
           python - <<'PY'
-          import os, pathlib, pandas as pd
-          base = pathlib.Path(os.environ.get("CRIME_DATA_DIR","crime_prediction_data"))
-          for p in [base/"sf_crime.csv", pathlib.Path("sf_crime.csv")]:
-              if p.exists():
-                  df = pd.read_csv(p, nrows=5)
-                  print(f"✅ Okundu: {p} | örnek satırlar={len(df)}")
-                  print(df.head().to_string(index=False))
-                  break
+          import os, pandas as pd
+          p = os.path.join(os.environ["CRIME_DATA_DIR"], "sf_population.csv")
+          df = pd.read_csv(p)
+          low = {c.lower(): c for c in df.columns}
+          if 'geoid' not in low and 'geography_id' in low:
+              df.rename(columns={low['geography_id']: 'GEOID'}, inplace=True)
+          for cand in ['population','total_population','b01003_001e','estimate','total','value']:
+              if cand in low and 'population' not in df.columns:
+                  df.rename(columns={low[cand]: 'population'}, inplace=True); break
+          df.to_csv(p, index=False)
+          print("Normalized headers:", df.columns.tolist())
           PY
 
-      - name: Convert important CSVs → Parquet (root and CRIME_DATA_DIR)
+      - name: 04) Nüfus → sf_crime_03.csv
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          POPULATION_PATH: ${{ env.CRIME_DATA_DIR }}/sf_population.csv
+          CENSUS_GEO_LEVEL: ${{ env.CENSUS_GEO_LEVEL }}
+          ACS_YEAR: ${{ env.ACS_YEAR }}
+          DEMOG_WHITELIST: ${{ env.DEMOG_WHITELIST }}
+        run: |
+          set -e
+          python -u update_population.py
+
+      - name: 05) Otobüs → sf_crime_04.csv
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          set -e
+          python -u update_bus.py
+
+      - name: 06) Tren (BART) → sf_crime_05.csv
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          set -e
+          python -u update_train.py
+
+      - name: 07) POI zenginleştirme → sf_crime_06.csv
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          set -e
+          if [ -f update_poi.py ]; then
+            python -u update_poi.py
+          elif [ -f pipeline_make_sf_crime_06.py ]; then
+            python -u pipeline_make_sf_crime_06.py
+          else
+            echo "❌ POI adımı bulunamadı"; exit 2
+          fi
+
+      - name: 08) Polis & Devlet binaları → sf_crime_07.csv
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          set -e
+          if [ -f update_police_gov.py ]; then
+            python -u update_police_gov.py
+          elif [ -f scripts/enrich_police_gov_06_to_07.py ]; then
+            python -u scripts/enrich_police_gov_06_to_07.py
+          else
+            echo "❌ Polis/Gov adımı bulunamadı"; exit 2
+          fi
+
+      - name: 09) Hava durumu → sf_crime_08.csv
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          set -e
+          if [ -f update_weather.py ]; then
+            python -u update_weather.py
+          elif [ -f scripts/update_weather.py ]; then
+            python -u scripts/update_weather.py
+          else
+            echo "❌ Weather script not found"; exit 2
+          fi
+          echo "sf_crime_08.csv — head:"
+          head -n 5 "${CRIME_DATA_DIR}/sf_crime_08.csv" || head -n 5 sf_crime_08.csv || true
+
+      - name: 10) neighbors.csv → üret/normalize/kalite
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
           CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
+          STACKING_DATASET: ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
+          NEIGHBOR_FILE: ${{ env.CRIME_DATA_DIR }}/neighbors.csv
+          NEIGHBOR_STRATEGY: queen
+          MIN_NEIGHBOR_DEG: "3"
+          KNN_K: "5"
+          NEIGHBOR_POLY: ${{ env.CRIME_DATA_DIR }}/sf_grid.geojson
         run: |
           set -euo pipefail
+          DEST="${CRIME_DATA_DIR}/neighbors.csv"
+          mkdir -p "${CRIME_DATA_DIR}"
+          # 1) Varsa kopyala
+          for p in "${CRIME_DATA_DIR}/neighbors.csv" "neighbors.csv" "data/neighbors.csv" "inputs/neighbors.csv"; do
+            [ -f "$p" ] || continue
+            if [ -e "$DEST" ] && [ "$p" -ef "$DEST" ]; then
+              echo "ℹ️ Zaten hedefte: $DEST"
+            else
+              cp -f "$p" "$DEST"; echo "✅ Copied: $p → $DEST"
+            fi; break
+          done
+          # 2) Başlık normalize + çift yön/tekille
+          python - <<'PY'
+          import os, pandas as pd, sys, re
+          p = os.path.join(os.environ["CRIME_DATA_DIR"], "neighbors.csv")
+          try: df = pd.read_csv(p, dtype=str)
+          except Exception: sys.exit(0)
+          if df.empty: sys.exit(0)
+          low = {c.lower(): c for c in df.columns}
+          src = low.get("geoid") or low.get("src") or low.get("source")
+          dst = low.get("neighbor") or low.get("neighbor_geoid") or low.get("dst") or low.get("target")
+          if not src or not dst: sys.exit(0)
+          df = df.rename(columns={src:"geoid", dst:"neighbor"})
+          L = int(os.environ.get("GEOID_LEN","11"))
+          for c in ("geoid","neighbor"):
+              df[c] = df[c].astype(str).str.extract(r"(\d+)", expand=False).str.zfill(L)
+          rev = df.rename(columns={"geoid":"neighbor","neighbor":"geoid"})
+          out = pd.concat([df, rev], ignore_index=True)
+          out = out[out["geoid"] != out["neighbor"]].drop_duplicates()
+          out[["geoid","neighbor"]].to_csv(p, index=False)
+          print("neighbors.csv normalized:", len(out))
+          PY
+          echo "neighbors.csv (head):"; head -n 10 "${DEST}" || true
+
+      - name: 11) Stacking ML kurulumu
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          python -m pip install -U pip wheel setuptools
+          pip install pandas numpy scikit-learn joblib
+          pip install xgboost lightgbm || true
+
+      - name: 12) Stacking risk pipeline (risk_hourly*)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          STACKING_DATASET: ${{ env.CRIME_DATA_DIR }}/sf_crime_grid_full_labeled.csv
+          ENABLE_SPATIAL_TE: "1"
+          TE_ALPHA: "50"
+          NEIGHBOR_FILE: ${{ env.CRIME_DATA_DIR }}/neighbors.csv
+          ENABLE_TE_ABLATION: "1"
+          ABLASYON_BASIS: "ohe"
+        run: |
+          set -e
+          if [ ! -f "${STACKING_DATASET}" ]; then
+            echo "❌ STACKING_DATASET yok: ${STACKING_DATASET}"; exit 2
+          fi
+          python -u stacking_risk_pipeline.py
+
+      - name: 13) Patrol için ek bağımlılıklar
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          python -m pip install -U requests tzdata
+
+      - name: 14) yarin.csv & week.csv (Visual Crossing)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          VISUAL_CROSSING_API_KEY: ${{ secrets.VISUAL_CROSSING_API_KEY }}
+          WX_LOCATION: ${{ env.WX_LOCATION }}
+          WX_UNIT: ${{ env.WX_UNIT }}
+          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
+        run: |
+          set -e
+          python - <<'PY'
+          import os, requests, pandas as pd
+          from datetime import datetime, timedelta
+          from zoneinfo import ZoneInfo
+          API_KEY = os.environ["VISUAL_CROSSING_API_KEY"]
+          LOCATION = os.environ.get("WX_LOCATION","san francisco")
+          UNIT = os.environ.get("WX_UNIT","us")
+          OUTDIR = os.environ.get("CRIME_DATA_DIR","crime_data")
+          url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{LOCATION}?unitGroup={UNIT}&key={API_KEY}&contentType=json"
+          r = requests.get(url, timeout=30); r.raise_for_status()
+          data = r.json()
+          SF = ZoneInfo("America/Los_Angeles")
+          today = datetime.now(SF).date()
+          tomorrow = today + timedelta(days=1)
+          week_end = tomorrow + timedelta(days=6)
+          def rowpick(d):
+              return {"date": d.get("datetime"), "tempmax": d.get("tempmax"), "tempmin": d.get("tempmin"),
+                      "precip": d.get("precip", 0), "precipprob": d.get("precipprob"), "windspeed": d.get("windspeed"),
+                      "humidity": d.get("humidity"), "description": d.get("description"), "icon": d.get("icon"),
+                      "unit_group": UNIT}
+          days = data.get("days", [])
+          t_key = tomorrow.strftime("%Y-%m-%d")
+          td = next((d for d in days if d.get("datetime") == t_key), None)
+          df_t = pd.DataFrame([rowpick(td)]) if td else pd.DataFrame([{"date": t_key, "unit_group": UNIT}])
+          os.makedirs(OUTDIR, exist_ok=True)
+          df_t.to_csv(os.path.join(OUTDIR, "yarin.csv"), index=False)
+          rows = []
+          for d in days:
+              try: from datetime import datetime as _dt; dd = _dt.strptime(d.get("datetime",""), "%Y-%m-%d").date()
+              except Exception: continue
+              if tomorrow <= dd <= week_end: rows.append(rowpick(d))
+          pd.DataFrame(rows).to_csv(os.path.join(OUTDIR, "week.csv"), index=False)
+          PY
+          echo "---- yarin.csv (head) ----"; head -n 5 "${CRIME_DATA_DIR}/yarin.csv" || true
+          echo "---- week.csv (head) ----"; head -n 5 "${CRIME_DATA_DIR}/week.csv" || true
+
+      - name: 15) post_patrol.py (risk_hourly + yarin/week)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
+          PATROL_TOP_K: ${{ env.PATROL_TOP_K }}
+          PATROL_HORIZON_DAYS: ${{ env.PATROL_HORIZON_DAYS }}
+        run: |
+          set -e
+          test -f "${CRIME_DATA_DIR}/risk_hourly.csv" || { echo "❌ risk_hourly.csv yok"; exit 2; }
+          python -u scripts/post_patrol.py
+          echo "---- patrol_recs_multi.csv (head) ----"
+          head -n 20 "${CRIME_DATA_DIR}/patrol_recs_multi.csv" || true
+
+      - name: 16) Quick preview (stacking outputs)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          echo "risk_hourly* (ilk 5)"; head -n 5 ${CRIME_DATA_DIR}/risk_hourly*.csv 2>/dev/null || true
+          echo "patrol_recs* (ilk 5)"; head -n 5 ${CRIME_DATA_DIR}/patrol_recs*.csv 2>/dev/null || true
+          echo "metrics_* (ilk 5)"; head -n 5 ${CRIME_DATA_DIR}/metrics_*.csv 2>/dev/null || true
+
+      # ---------- TEŞHİS: Ne üretildi, nerede? ----------
+      - name: Catalog outputs (diagnostic)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          echo "==== FIND IN ROOT ====";   find . -maxdepth 2 -type f -name "sf_crime*.csv" -o -name "risk_hourly*.csv" -o -name "patrol_recs*.csv" 2>/dev/null | sed 's/^/- /'
+          echo "==== FIND IN CRIME_DATA_DIR ===="; find "${CRIME_DATA_DIR}" -maxdepth 2 -type f -print 2>/dev/null | sed 's/^/- /'
+          echo "==== SIZES (CRIME_DATA_DIR) ===="; du -h "${CRIME_DATA_DIR}" || true
+
+      # ---------- CSV → Parquet OTO ÜRET (kritik dosyalar) ----------
+      - name: Ensure Parquet for core CSVs
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
           python - <<'PY'
           import os, pathlib, pandas as pd
           base = pathlib.Path(os.environ.get("CRIME_DATA_DIR","crime_prediction_data"))
-          to_try = [
-              pathlib.Path("sf_crime.csv"),
-              pathlib.Path("sf_crime_y.csv"),
-              pathlib.Path("sf_crime_grid_full_labeled.csv"),
-              base/"sf_crime.csv",
-              base/"sf_crime_y.csv",
-              base/"sf_crime_grid_full_labeled.csv",
+          # Parquet'e çevirmek istediğimiz kritik CSV listesi:
+          csvs = [
+            base/"sf_crime_y.csv",
+            base/"sf_crime_54.csv",
+            base/"sf_crime_grid_full_labeled.csv",
+            base/"risk_hourly.csv",
+            base/"patrol_recs_multi.csv",
           ]
-          for csv in to_try:
-              if csv.exists():
-                  pq = csv.with_suffix(".parquet")
-                  try:
-                      df = pd.read_csv(csv, low_memory=False)
-                      df.to_parquet(pq, index=False)
-                      print(f"✅ Parquet yazıldı: {pq}")
-                  except Exception as e:
-                      print(f"⚠️ Parquet üretilemedi: {csv} -> {e}")
+          made=[]
+          for p in csvs:
+            if p.exists():
+              pq = p.with_suffix(".parquet")
+              try:
+                df = pd.read_csv(p, low_memory=False)
+                df.to_parquet(pq, index=False)
+                made.append(str(pq))
+                print("✅ Parquet:", pq)
+              except Exception as e:
+                print("⚠️ Parquet üretilemedi:", p, "->", e)
+          if not made:
+            print("ℹ️ Parquet’e çevrilecek dosya bulunamadı (atılandı).")
           PY
 
-      - name: Collect outputs for artifact
+      # ---------- HEPSİNİ TOPLA: _artifacts/ ----------
+      - name: Stage outputs for artifact (robust)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
           CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
         run: |
           set -euo pipefail
           mkdir -p _artifacts "${CRIME_DATA_DIR}"
-          # Kök dizin
+
+          # Kök klasörden topla (varsa)
           for f in \
-            sf_crime.csv sf_crime.parquet \
-            sf_crime_y.csv sf_crime_y.parquet \
+            sf_crime.csv sf_crime_y.csv sf_crime_y.parquet \
+            sf_crime_54.csv sf_crime_54.parquet \
             sf_crime_grid_full_labeled.csv sf_crime_grid_full_labeled.parquet \
-            ; do
-            [ -f "$f" ] && cp -f "$f" _artifacts/ && echo "✔ root -> _artifacts/$f"
+            risk_hourly.csv risk_hourly.parquet \
+            patrol_recs_multi.csv patrol_recs_multi.parquet \
+          ; do
+            if [ -f "$f" ]; then cp -f "$f" _artifacts/ && echo "✔ root/$f"; fi
           done
-          # CRIME_DATA_DIR altı
+
+          # CRIME_DATA_DIR altından topla
           for f in \
-            sf_crime.csv sf_crime.parquet \
-            sf_crime_y.csv sf_crime_y.parquet \
+            sf_crime.csv sf_crime_y.csv sf_crime_y.parquet \
+            sf_crime_54.csv sf_crime_54.parquet \
+            sf_crime_09.csv sf_crime_08.csv sf_crime_07.csv sf_crime_06.csv sf_crime_05.csv sf_crime_04.csv sf_crime_03.csv sf_crime_02.csv sf_crime_01.csv \
             sf_crime_grid_full_labeled.csv sf_crime_grid_full_labeled.parquet \
-            ; do
+            sf_311_last_5_years.csv sf_311_last_5_years_y.csv \
+            sf_911_last_5_year.csv sf_911_last_5_year_y.csv \
+            sf_bus_stops_with_geoid.csv sf_train_stops_with_geoid.csv sf_pois_cleaned_with_geoid.csv \
+            sf_weather_5years.csv sf_weather_5years_y.csv \
+            yarin.csv week.csv \
+          ; do
             if [ -f "${CRIME_DATA_DIR}/$f" ]; then
               mkdir -p "_artifacts/${CRIME_DATA_DIR}"
               cp -f "${CRIME_DATA_DIR}/$f" "_artifacts/${CRIME_DATA_DIR}/"
-              echo "✔ ${CRIME_DATA_DIR}/$f -> _artifacts/${CRIME_DATA_DIR}/$f"
+              echo "✔ ${CRIME_DATA_DIR}/$f"
             fi
           done
-          echo "📦 İçerik:"
-          find _artifacts -type f -maxdepth 3 -print | sed -n '1,200p'
-          # En az bir dosya olsun
-          if [ -z "$(find _artifacts -type f 2>/dev/null)" ]; then
-            echo "❌ Yüklenecek dosya bulunamadı. update_crime.py çıktıları üretiyor mu?"
+
+          # GeoJSON’lar (varsa)
+          if compgen -G "${CRIME_DATA_DIR}/*.geojson" > /dev/null; then
+            mkdir -p "_artifacts/${CRIME_DATA_DIR}"
+            cp -f ${CRIME_DATA_DIR}/*.geojson "_artifacts/${CRIME_DATA_DIR}/" || true
+            echo "✔ ${CRIME_DATA_DIR}/*.geojson"
+          fi
+
+          echo "📦 _artifacts içeriği:"
+          find _artifacts -type f | sed 's/^/- /'
+
+          # Eğer sadece sf_crime.csv bulunabildiyse FAIL et (teşhis kolaylığı için)
+          CNT_TOTAL=$(find _artifacts -type f | wc -l | tr -d ' ')
+          CNT_CRIME_ONLY=$(find _artifacts -type f -name "sf_crime.csv" | wc -l | tr -d ' ')
+          if [ "$CNT_TOTAL" -gt 0 ] && [ "$CNT_TOTAL" -eq "$CNT_CRIME_ONLY" ]; then
+            echo "❌ Yalnızca sf_crime.csv bulundu; diğer çıktılar üretilmemiş ya da farklı klasöre yazılmış."
+            echo "Lütfen üretim adımlarının ${CRIME_DATA_DIR}/ altına yazdığını doğrula."
+            exit 4
+          fi
+
+          # Hiçbir dosya yoksa da FAIL et
+          if [ "$CNT_TOTAL" -eq 0 ]; then
+            echo "❌ Artifact’e eklenecek dosya bulunamadı."
             exit 3
           fi
 
+      # ---------- Artifact yükle ----------
       - name: Upload artifact (collected)
-        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'artifact') }}
+        if: ${{ steps.gate.outputs.proceed == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'artifact')) }}
         uses: actions/upload-artifact@v4
         with:
-          name: sf-crime-output
+          name: sf-crime-pipeline-output
           path: _artifacts
           if-no-files-found: error
           retention-days: 14
 
-      - name: Commit & push (opsiyonel)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'commit' }}
+      # (İsteğe bağlı) Repo'ya commit
+      - name: Commit & push (optional)
+        if: ${{ steps.gate.outputs.proceed == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'commit' }}
         run: |
           set -e
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "🔄 update_crime.py outputs" || echo "No changes"
+          git commit -m "🔄 Full pipeline outputs (CSV+Parquet)" || echo "No changes"
           git push || echo "Nothing to push"
-
