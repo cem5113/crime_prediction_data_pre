@@ -24,7 +24,7 @@ except Exception:
     STRtree = None
 
 # ================== 0) YOLLAR ==================
-BASE_DIR       = "crime_prediction_data"
+BASE_DIR       = "crime_prediction_data_pre"
 POI_GEOJSON_1  = os.path.join(BASE_DIR, "sf_pois.geojson")
 POI_GEOJSON_2  = os.path.join(".",       "sf_pois.geojson")        # fallback
 BLOCK_PATH_1   = os.path.join(BASE_DIR, "sf_census_blocks_with_population.geojson")
