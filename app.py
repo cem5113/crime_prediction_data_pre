@@ -199,11 +199,14 @@ def fetch_file_from_latest_artifact(pick_names: list[str], artifact_name="sf-cri
                     if any(n.endswith(p) for p in pick_names):
                         return zf.read(n)
     return None
-
-def dispatch_workflow() -> dict:
+    
+def dispatch_workflow(persist: str = "artifact", force: bool = True, top_k: str = "50") -> dict:
     import json as _json
     url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW}/dispatches"
-    payload = {"ref": "main"}
+    payload = {
+        "ref": "main",
+        "inputs": {"persist": persist, "force": "true" if force else "false", "top_k": top_k}
+    }
     r = requests.post(url, headers=_gh_headers(), data=_json.dumps(payload), timeout=30)
     return {"ok": r.status_code in (204, 201), "status": r.status_code, "text": r.text}
 
