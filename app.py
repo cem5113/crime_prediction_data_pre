@@ -956,16 +956,16 @@ def clean_and_save_crime_09(input_obj: Union[str, Path, pd.DataFrame]="sf_crime_
 # =======================
 st.title("📦 Günlük Suç Tahmin — Parquet Pipeline")
 
-    with st.sidebar.expander("Workflow ayarları", True):
-        wf_default = os.environ.get("GITHUB_WORKFLOW", "full_pipeline.yml")
-        wf_selector = st.text_input(
-            "Workflow (ad / path / id)",
-            value=wf_default,
-            help="Örn: full_pipeline.yml veya 'Full SF Crime Pipeline'"
-        )
-    
-        ref_default = os.environ.get("GITHUB_REF_NAME", "main")
-        ref_branch = st.text_input("Ref/branch", value=ref_default)
+with st.sidebar.expander("Workflow ayarları", True):
+    wf_default = os.environ.get("GITHUB_WORKFLOW", "full_pipeline.yml")
+    wf_selector = st.text_input(
+        "Workflow (ad / path / id)",
+        value=wf_default,
+        help="Örn: full_pipeline.yml veya 'Full SF Crime Pipeline'"
+    )
+
+    ref_default = os.environ.get("GITHUB_REF_NAME", "main")
+    ref_branch = st.text_input("Ref/branch", value=ref_default)
 
 with st.sidebar:
     st.markdown("### GitHub Actions")
