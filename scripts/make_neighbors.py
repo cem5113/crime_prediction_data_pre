@@ -11,7 +11,7 @@ try:
 except Exception:
     gpd = None
 
-CRIME_DIR = Path(os.environ.get("CRIME_DATA_DIR", "crime_prediction_data"))
+CRIME_DIR = Path(os.environ.get("CRIME_DATA_DIR", "crime_prediction_data_pre"))
 GEOID_LEN = int(os.environ.get("GEOID_LEN", "11"))
 
 # Davranış bayrakları
