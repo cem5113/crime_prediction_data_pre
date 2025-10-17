@@ -14,7 +14,7 @@ SF = ZoneInfo("America/Los_Angeles")
 API_KEY = os.environ.get("VISUAL_CROSSING_API_KEY", "").strip()
 LOCATION = os.environ.get("WX_LOCATION", "san francisco").strip()
 UNIT = os.environ.get("WX_UNIT", "us").strip().lower()  # 'us' | 'metric'
-OUTDIR = os.environ.get("CRIME_DATA_DIR", "crime_prediction_data")
+OUTDIR = os.environ.get("CRIME_DATA_DIR", "crime_prediction_data_pre")
 
 today = datetime.now(SF).date()
 tomorrow = today + timedelta(days=1)
