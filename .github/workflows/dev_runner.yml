@@ -33,7 +33,7 @@ permissions:
   contents: write
 
 env:
-  CRIME_DATA_DIR: crime_prediction_data
+  CRIME_DATA_DIR: crime_prediction_data_pre
   GEOID_LEN: "11"
   SOCS_APP_TOKEN: ${{ secrets.SOCS_APP_TOKEN }}
   PYTHONUNBUFFERED: "1"
@@ -52,7 +52,7 @@ jobs:
           git lfs install
           git lfs pull
           echo "Repo kök:"; ls -lah
-          echo "crime_prediction_data:"; ls -lah crime_prediction_data || true
+          echo "crime_prediction_data_pre:"; ls -lah crime_prediction_data_pre || true
 
       # ---- En son BAŞARILI full pipeline artifact'ını indir (fallback için) ----
       - name: Restore last-good snapshot (from Full SF Crime Pipeline)
@@ -69,8 +69,8 @@ jobs:
           if [ -d last_good ]; then
             echo "last_good/ içeriği:"
             ls -lah last_good || true
-            echo "last_good/crime_prediction_data/ içeriği:"
-            ls -lah last_good/crime_prediction_data || true
+            echo "last_good/crime_prediction_data_pre/ içeriği:"
+            ls -lah last_good/crime_prediction_data_pre || true
           else
             echo "last_good/ yok (daha önce başarılı full pipeline artifact bulunamadı)."
           fi
@@ -100,8 +100,8 @@ jobs:
           echo "Seçili adım: ${{ github.event.inputs.step }}"
           echo "Mevcut dosyalar:"
           ls -lah
-          echo "crime_prediction_data/"
-          ls -lah crime_prediction_data || true
+          echo "crime_prediction_data_pre/"
+          ls -lah crime_prediction_data_pre || true
 
       # ---- ÇALIŞTIRMA (Hata → fallback → devam) ----
       - name: Run selected step (with fallback)
@@ -110,16 +110,16 @@ jobs:
           set -uo pipefail
 
           copy_fallback() {
-            if [ -d last_good/crime_prediction_data ]; then
-              mkdir -p crime_prediction_data
-              cp -f last_good/crime_prediction_data/*.csv crime_prediction_data/ 2>/dev/null || true
-              cp -f last_good/crime_prediction_data/*.geojson crime_prediction_data/ 2>/dev/null || true
-              echo "ℹ️ Fallback: last_good/crime_prediction_data → crime_prediction_data/ kopyalandı."
+            if [ -d last_good/crime_prediction_data_pre ]; then
+              mkdir -p crime_prediction_data_pre
+              cp -f last_good/crime_prediction_data_pre/*.csv crime_prediction_data_pre/ 2>/dev/null || true
+              cp -f last_good/crime_prediction_data_pre/*.geojson crime_prediction_data_pre/ 2>/dev/null || true
+              echo "ℹ️ Fallback: last_good/crime_prediction_data_pre → crime_prediction_data_pre/ kopyalandı."
             elif [ -d last_good ]; then
-              mkdir -p crime_prediction_data
-              cp -f last_good/*.csv crime_prediction_data/ 2>/dev/null || true
-              cp -f last_good/*.geojson crime_prediction_data/ 2>/dev/null || true
-              echo "ℹ️ Fallback: last_good → crime_prediction_data/ kopyalandı."
+              mkdir -p crime_prediction_data_pre
+              cp -f last_good/*.csv crime_prediction_data_pre/ 2>/dev/null || true
+              cp -f last_good/*.geojson crime_prediction_data_pre/ 2>/dev/null || true
+              echo "ℹ️ Fallback: last_good → crime_prediction_data_pre/ kopyalandı."
             else
               echo "❌ Fallback mümkün değil: last_good/ yok."
             fi
@@ -168,14 +168,14 @@ jobs:
       - name: Quick preview (ilk satırlar)
         run: |
           echo "sf_crime_08.csv (varsa) – ilk 5 satır"
-          head -n 5 crime_prediction_data/sf_crime_08.csv || true
+          head -n 5 crime_prediction_data_pre/sf_crime_08.csv || true
 
       - name: Pack outputs
         run: |
           mkdir -p out
-          cp -f crime_prediction_data/*.csv out/ 2>/dev/null || true
+          cp -f crime_prediction_data_pre/*.csv out/ 2>/dev/null || true
           cp -f *.csv out/ 2>/dev/null || true
-          cp -f crime_prediction_data/*.geojson out/ 2>/dev/null || true
+          cp -f crime_prediction_data_pre/*.geojson out/ 2>/dev/null || true
           ls -lah out || true
 
       - name: Upload artifact (default)
