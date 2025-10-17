@@ -106,7 +106,7 @@ def prep_points(df_points: pd.DataFrame) -> pd.DataFrame:
 # -----------------------------------------------------------------------------
 # GİRİŞ/ÇIKIŞ YOLLARI
 # -----------------------------------------------------------------------------
-BASE_DIR  = "crime_prediction_data"
+BASE_DIR  = "crime_prediction_data_pre"
 Path(BASE_DIR).mkdir(exist_ok=True)
 
 CRIME_INPUT_CANDIDATES = [
