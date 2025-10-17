@@ -144,7 +144,10 @@ def _gh_headers():
     token = st.secrets.get("GH_TOKEN") or os.environ.get("GH_TOKEN")
     if not token:
         raise RuntimeError("GH_TOKEN gerekli (Streamlit secrets veya env).")
-    return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json"
+    }
 
 def fetch_file_from_latest_artifact(pick_names: list[str], artifact_name="sf-crime-pipeline-output") -> bytes | None:
     """Son başarılı run'dan artifact içindeki pick_names listesinde geçen ilk dosyayı döndürür (bytes)."""
@@ -172,19 +175,30 @@ def fetch_file_from_latest_artifact(pick_names: list[str], artifact_name="sf-cri
                         return zf.read(n)
     return None
 
-def dispatch_workflow(persist: str = "artifact", force: bool = True) -> dict:
-    """Actions workflow’u tetikle (persist: artifact|commit|none, force: 07:00 kapısını bypass)."""
-    import json as _json
+def dispatch_workflow(persist: str = "artifact", force: bool = True, top_k: str = "50") -> dict:
+    """
+    GitHub Actions workflow’u tetikler.
+    persist: artifact|commit|none
+    force  : True/False → GitHub inputs’ta "true"/"false" olarak gönderilir
+    top_k  : string (örn. "50")
+    """
     url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW}/dispatches"
     payload = {
         "ref": "main",
         "inputs": {
-            "persist": persist,
-            "force": "true" if force else "false"  # 🔴 booleanlar string olmalı
+            "persist": str(persist),
+            "force": str(force).lower(),   # "true"/"false"
+            "top_k": str(top_k)
         }
     }
-    r = requests.post(url, headers=_gh_headers(), data=_json.dumps(payload), timeout=30)
-    return {"ok": r.status_code in (204, 201), "status": r.status_code, "text": r.text}
+    r = requests.post(
+        url,
+        headers={**_gh_headers(), "Accept": "application/vnd.github+json"},
+        json=payload,                    # ✅ data yerine json kullan
+        timeout=30
+    )
+    return {"ok": r.status_code in (201, 204), "status": r.status_code, "text": r.text}
+
 
 def _get_last_run_by_workflow():
     """full_pipeline.yml için en son run (1 adet)"""
@@ -214,7 +228,7 @@ def _render_last_run_status(container):
     except Exception as e:
         container.warning(f"Durum okunamadı: {e}")
 
-def fetch_latest_artifact_df() -> Optional[p.DataFrame]:
+def fetch_latest_artifact_df() -> Optional[pd.DataFrame]:
     """Son başarılı run’daki artifact içinden sf_crime_08.csv’yi getir."""
     try:
         runs_url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/runs?per_page=20"
@@ -623,44 +637,46 @@ def clean_and_save_crime_09(input_obj="sf_crime_08.csv", output_path="sf_crime_0
 # Streamlit UI
 st.title("📦 Günlük Suç Tahmin Zenginleştirme ve Güncelleme Paneli")
 
-with st.sidebar:
-    st.markdown("### GitHub Actions")
-    # Çıktı saklama modu
-    persist = st.selectbox(
-        "Çıktıyı saklama modu",
-        ["artifact", "commit", "none"],
-        index=0,
-        help="artifact: repo’yu bozmadan sakla • commit: repo’ya yaz • none: sadece log"
-    )
-    # 07:00 kapısını bypass et (manuel tetiklemelerde önerilir)
-    force_bypass = st.checkbox(
-        "07:00 kapısını yok say (force)",
-        value=True,
-        help="İşaretli ise saat filtresi devre dışı kalır ve pipeline her saatte çalışır."
-    )
+# --- GitHub Actions kontrol paneli (ana gövde) ---
+st.markdown("### 🔧 GitHub Actions – Full Pipeline")
 
-    # Son run durum kutusu
-    status_box = st.empty()
-    _render_last_run_status(status_box)
+# Kullanıcı seçenekleri
+col_sel1, col_sel2, col_sel3 = st.columns([1,1,1])
+with col_sel1:
+    persist = st.selectbox("persist", ["artifact", "commit", "none"], index=0)
+with col_sel2:
+    force_bypass = st.checkbox("force (07:00 kapısını aş)", value=True)
+with col_sel3:
+    top_k_in = st.text_input("top_k", value="50", help="Workflow input’u (string)")
 
-    # Butonlar
-    col_run, col_refresh = st.columns(2)
-    with col_run:
-        if st.button("🚀 Full pipeline’ı Actions’ta çalıştır"):
-            if not (st.secrets.get("GH_TOKEN") or os.environ.get("GH_TOKEN")):
-                st.error("GH_TOKEN tanımlı değil (Streamlit secrets veya env).")
-            else:
+# Durum kutusu ve butonlar
+status_box = st.empty()
+col_run, col_refresh = st.columns(2)
+
+with col_run:
+    if st.button("🚀 Full pipeline’ı Actions’ta çalıştır"):
+        if not (st.secrets.get("GH_TOKEN") or os.environ.get("GH_TOKEN")):
+            st.error("GH_TOKEN tanımlı değil (Streamlit secrets veya env).")
+        else:
+            with st.spinner("Workflow tetikleniyor..."):
                 try:
-                    r = dispatch_workflow(persist=persist, force=force_bypass)
+                    r = dispatch_workflow(persist=persist, force=force_bypass, top_k=str(top_k_in))
                     if r["ok"]:
-                        st.success(f"Workflow tetiklendi (persist={persist}, force={force_bypass}). Runs’ı kontrol et.")
+                        st.success(f"Workflow tetiklendi ✅ (persist={persist}, force={force_bypass}, top_k={top_k_in})")
                     else:
-                        st.error(f"Tetikleme başarısız: {r['status']} {r['text']}")
+                        st.error(f"Tetikleme başarısız ❌: {r['status']} – {r['text']}")
                 except Exception as e:
                     st.error(f"Hata: {e}")
-    with col_refresh:
-        if st.button("📡 Son durumu yenile"):
-            _render_last_run_status(status_box)
+
+with col_refresh:
+    if st.button("📡 Son durumu yenile"):
+        _render_last_run_status(status_box)
+
+# Sayfa yüklenince bir kere durum göster
+if not (st.secrets.get("GH_TOKEN") or os.environ.get("GH_TOKEN")):
+    status_box.info("GH_TOKEN yok; GitHub durumunu okuyamıyorum.")
+else:
+    _render_last_run_status(status_box)
 
     with st.sidebar.expander("ACS Ayarları (Demografi)"):
         # Varsayılanlar (ENV > mevcut değer > fallback)
