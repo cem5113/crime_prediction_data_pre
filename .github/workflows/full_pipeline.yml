@@ -11,7 +11,7 @@ on:
         options: [artifact, commit, none]
         default: artifact
       force:
-        description: "07:00 kapısını yok say"
+        description: "07:00 kuralını manuelde atla"
         type: boolean
         default: true
       top_k:
