@@ -6,7 +6,7 @@ GEOID komşuluk dosyası üretir.
 - Poligon katmanındaki GEOID alanını otomatik bulur (veya POLY_GEO_COL ile zorla).
 - Eşleşmeyi hem 'ilk L' hem 'son L' den dener; en yüksek örtüşmeyi seçer.
 - Queen contiguity (en az bir nokta temas) ile komşuluk kurar.
-Çıktı: crime_prediction_data/neighbors.csv  (iki sütun: GEOID,neighbor)
+Çıktı: crime_prediction_data_pre/neighbors.csv  (iki sütun: GEOID,neighbor)
 """
 
 import os
@@ -15,11 +15,11 @@ import re
 import pandas as pd
 import geopandas as gpd
 
-CRIME_DIR    = os.getenv("CRIME_DATA_DIR", "crime_prediction_data")
+CRIME_DIR    = os.getenv("CRIME_DATA_DIR", "crime_prediction_data_pre")
 DATASET      = os.getenv("STACKING_DATASET", str(Path(CRIME_DIR) / "sf_crime_grid_full_labeled.csv"))
 GEOID_LEN    = int(os.getenv("GEOID_LEN", "11"))
 OUT_PATH     = str(Path(CRIME_DIR) / "neighbors.csv")
-POLY_FILE    = os.getenv("POLY_FILE", "").strip()      # ör: crime_prediction_data/sf_census_blocks_with_population.geojson
+POLY_FILE    = os.getenv("POLY_FILE", "").strip()      # ör: crime_prediction_data_pre/sf_census_blocks_with_population.geojson
 POLY_GEO_COL = os.getenv("POLY_GEO_COL", "").strip()   # ör: GEOID
 
 # ---------- yardımcılar ----------
@@ -91,7 +91,7 @@ def find_polygon_layer(keys: set[str]):
             continue
 
     if not best or best_overlap == 0:
-        raise SystemExit("Polygon katmanı bulunamadı: crime_prediction_data içinde GEOID örtüşmesi yakalanamadı.")
+        raise SystemExit("Polygon katmanı bulunamadı: crime_prediction_data_pre içinde GEOID örtüşmesi yakalanamadı.")
     print(f"✅ Poligon: {best.name} | GEOID sütunu: {best_geocol} | normalize: {best_mode} {GEOID_LEN}")
     return str(best), best_geocol, best_mode
 
