@@ -79,12 +79,16 @@ jobs:
           print(df.head().to_string(index=False))
           PY
 
-      - name: Upload artifact (sf_crime.csv)
+      - name: Upload artifact (sf_crime.csv veya y.csv)
         if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'artifact') }}
         uses: actions/upload-artifact@v4
         with:
-          name: sf-crime-only
+          name: sf-crime-output
           path: |
-            ${{ env.CRIME_DATA_DIR }}/sf_crime.csv
-          if-no-files-found: error
+            sf_crime.csv
+            sf_crime_y.csv
+            crime_prediction_data/sf_crime.csv
+            crime_prediction_data/sf_crime_y.csv
+          if-no-files-found: ignore
           retention-days: 14
+
