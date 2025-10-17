@@ -153,7 +153,7 @@ def download_bus_with_retry(base_url: str, headers: dict, limit: int = 50000, ma
     return pd.concat(rows, ignore_index=True)
 
 # ========== yollar & ENV ==========
-BASE_DIR = os.getenv("CRIME_DATA_DIR", "crime_prediction_data")
+BASE_DIR = os.getenv("CRIME_DATA_DIR", "crime_prediction_data_pre")
 Path(BASE_DIR).mkdir(parents=True, exist_ok=True)
 
 # giriş/çıkışlar (kanonik + uyumluluk)
