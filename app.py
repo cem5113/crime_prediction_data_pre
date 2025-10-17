@@ -934,7 +934,7 @@ with st.sidebar:
                 st.error("GH_TOKEN tanımlı değil.")
             else:
                 try:
-                    r = dispatch_workflow
+                    r = dispatch_workflow()
                     if r["ok"]:
                         st.success(f"Workflow tetiklendi (persist={persist}, force={force_bypass}).")
                     else:
