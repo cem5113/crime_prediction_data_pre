@@ -103,9 +103,9 @@ print(f"📂 ROOT = {ROOT}")
 SEARCH_DIRS = [
     CWD,
     ROOT,
-    CWD / "crime_prediction_data",
-    ROOT / "crime_prediction_data",
-    ROOT.parent / "crime_prediction_data",
+    CWD / "crime_prediction_data_pre",
+    ROOT / "crime_prediction_data_pre",
+    ROOT.parent / "crime_prediction_data_pre",
 ]
 
 def _expand_candidates(names):
@@ -132,7 +132,7 @@ def pick_existing(paths):
     return None
 
 # ============== 1) Dosya yolları / girişler ===================================
-BASE_DIR = os.getenv("CRIME_DATA_DIR", "crime_prediction_data")
+BASE_DIR = os.getenv("CRIME_DATA_DIR", "crime_prediction_data_pre")
 Path(BASE_DIR).mkdir(exist_ok=True)
 
 # ZORUNLU: 07 girişi (ara dosyalar _y ALMAZ)
@@ -223,7 +223,7 @@ if weather_path:
     df_weather = pd.read_csv(weather_path, low_memory=False)
 else:
     if not ALLOW_STUB:
-        raise FileNotFoundError("❌ Hava dosyası yok: sf_weather_5years_y.csv veya sf_weather_5years.csv (repo/crime_prediction_data).")
+        raise FileNotFoundError("❌ Hava dosyası yok: sf_weather_5years_y.csv veya sf_weather_5years.csv (repo/crime_prediction_data_pre).")
     print("⚠️ Hava dosyası bulunamadı → STUB (boş çerçeve) kullanılacak.")
     df_weather = pd.DataFrame(columns=["date", "TMAX", "TMIN", "PRCP"])
 
