@@ -201,47 +201,47 @@ def fetch_file_from_latest_artifact(pick_names: list[str], artifact_name="sf-cri
                         return zf.read(n)
     return None
     
-def dispatch_workflow(persist="artifact", force=True, top_k="50"):
-    import json as _json, base64
-    base = f"https://api.github.com/repos/{GITHUB_REPO}"
-    # 1) workflow’u ID’ye çevir
-    wf = GITHUB_WORKFLOW
+def dispatch_workflow(persist: str = "artifact", force: bool = True, top_k: str = "50", ref: str = None) -> dict:
+    import json as _json, requests
+    repo = GITHUB_REPO
     headers = _gh_headers()
-    lst = requests.get(f"{base}/actions/workflows", headers=headers, timeout=20).json()
-    wf_id = None
-    for w in lst.get("workflows", []):
-        if w.get("path","").endswith(f"/{wf}") or w.get("name","") == wf or str(w.get("id")) == str(wf):
-            wf_id = w["id"]; break
 
-    if not wf_id:
-        return {"ok": False, "status": 404, "text": f"Workflow bulunamadı: {wf}"}
+    # 1) default branch’i otomatik bul (ref verilmemişse)
+    if not ref:
+        repo_meta = requests.get(f"https://api.github.com/repos/{repo}", headers=headers, timeout=15).json()
+        ref = repo_meta.get("default_branch", "main")
 
-    # 2) default branch’teki yml içeriğini getir ve workflow_dispatch var mı bak
-    meta = requests.get(f"{base}/actions/workflows/{wf_id}", headers=headers, timeout=20).json()
-    state = meta.get("state")
-    # içerik
-    path = meta.get("path")
-    yml = requests.get(f"{base}/contents/{path}", headers=headers, timeout=20).json()
-    content = ""
-    try:
-        if "content" in yml:
-            import base64
-            content = base64.b64decode(yml["content"]).decode("utf-8", "ignore")
-    except Exception:
-        pass
-    has_dispatch = "workflow_dispatch" in content
+    # 2) workflow id/path’ini doğrula (yanlış adı yakalamak için)
+    wf = GITHUB_WORKFLOW  # "full_pipeline.yml" bekleniyor
+    wf_meta = requests.get(f"https://api.github.com/repos/{repo}/actions/workflows/{wf}", headers=headers, timeout=15)
+    wf_json = wf_meta.json()
 
-    # 3) asıl dispatch
-    payload = {"ref": "main", "inputs": {"persist": persist, "force": "true" if force else "false", "top_k": top_k}}
-    resp = requests.post(f"{base}/actions/workflows/{wf_id}/dispatches", headers=headers, json=payload, timeout=30)
+    # 3) İçerikte 'workflow_dispatch' gerçekten var mı diye hızlı kontrol
+    path = wf_json.get("path")
+    has_dispatch = False
+    if path:
+        # içerik base64 geliyor; hata verse bile 200 dönmezse geçeriz
+        contents = requests.get(
+            f"https://api.github.com/repos/{repo}/contents/{path}?ref={ref}",
+            headers=headers, timeout=15
+        )
+        if contents.status_code == 200:
+            import base64, re
+            text = base64.b64decode(contents.json().get("content","")).decode("utf-8", errors="ignore")
+            has_dispatch = bool(re.search(r"^\s*workflow_dispatch\s*:", text, flags=re.M))
+
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{wf}/dispatches"
+    payload = {"ref": ref, "inputs": {"persist": persist, "force": "true" if force else "false", "top_k": top_k}}
+    resp = requests.post(url, headers=headers, data=_json.dumps(payload), timeout=30)
+
     return {
         "ok": resp.status_code in (204, 201),
         "status": resp.status_code,
         "text": resp.text,
-        "wf_id": wf_id,
-        "state": state,
-        "has_dispatch": has_dispatch,
+        "ref": ref,
         "path": path,
+        "has_dispatch": has_dispatch,
+        "wf_lookup_status": wf_meta.status_code,
     }
 
 def _get_last_run_by_workflow():
@@ -971,12 +971,13 @@ with st.sidebar:
                 st.error("GH_TOKEN tanımlı değil.")
             else:
                 try:
-                    r = dispatch_workflow(persist=persist, force=force_bypass, top_k="50")
+                    r = dispatch_workflow(persist=persist, force=force_bypass, top_k="50", ref=None)
                     if r["ok"]:
-                        st.success("Tetiklendi!")
+                        st.success("Workflow tetiklendi.")
                     else:
                         st.error(f"Tetikleme başarısız: {r['status']} {r['text']}")
-                        st.caption(f"workflow id={r.get('wf_id')} state={r.get('state')} path={r.get('path')} dispatch_in_file={r.get('has_dispatch')}")
+                        st.caption(f"ref={r.get('ref')} path={r.get('path')} dispatch_in_file={r.get('has_dispatch')} wf_lookup_status={r.get('wf_lookup_status')}")
+
                 except Exception as e:
                     st.error(f"Hata: {e}")
 
