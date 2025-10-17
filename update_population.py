@@ -61,7 +61,7 @@ def _level_name(L: int) -> str:
     return {5: "county", 11: "tract", 12: "blockgroup", 15: "block"}.get(L, f"L={L}")
 
 # ----------------------------- Paths/ENV -----------------------------
-BASE_DIR = Path(os.getenv("CRIME_DATA_DIR", "crime_prediction_data"))
+BASE_DIR = Path(os.getenv("CRIME_DATA_DIR", "crime_prediction_data_pre"))
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Crime input otomatik bul
