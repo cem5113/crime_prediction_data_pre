@@ -5,18 +5,10 @@ on:
     - cron: "0 14,15 * * *"        # SF 07:00 → 14/15 UTC
   workflow_dispatch:
     inputs:
-      persist:
-        description: "Sonuçları nasıl saklayalım?"
-        type: choice
-        options: [artifact, commit, none]
-        default: artifact
       force:
         description: "Manuel tetiklemede 07:00 kapısını YOK SAY"
         type: boolean
         default: true
-      top_k:
-        description: "Stacking: her saat dilimi için önerilecek GEOID sayısı"
-        default: "50"
 
 permissions:
   actions: read
@@ -45,7 +37,7 @@ env:
   SF911_API_TOKEN:     ${{ secrets.SF911_API_TOKEN }}
   SOCS_APP_TOKEN:      ${{ secrets.SOCS_APP_TOKEN }}
 
-  PATROL_TOP_K: ${{ github.event.inputs.top_k || '50' }}
+  PATROL_TOP_K: "50"
   PATROL_HORIZON_DAYS: "3"
   WX_LOCATION: "san francisco"
   WX_UNIT: "us"
@@ -557,14 +549,13 @@ jobs:
           ls -lah upload || true
 
       - name: Upload artifact (zip + loose parquet)
-        if: ${{ steps.gate.outputs.proceed == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'artifact')) }}
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: sf-crime-pipeline-output
           path: |
             upload/*.zip
             ${{ env.CRIME_DATA_DIR }}/*.parquet
-          if-no-files-found: warn
           retention-days: 14
 
       - name: Commit & push (optional)
