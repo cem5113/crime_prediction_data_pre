@@ -15,6 +15,10 @@ on:
         description: "Manuel tetiklemede 07:00 kapısını YOK SAY (bypass)"
         type: boolean
         default: true
+      top_k:
+        description: "En riskli GEOID sayısı (string/int girin)"
+        required: false
+        default: "50"
 
 permissions:
   actions: read
@@ -28,6 +32,7 @@ env:
   CRIME_DATA_DIR: crime_prediction_data_pre
   ARTIFACT_NAME: sf-crime-pipeline-output
   TARGET_FILE: sf_crime_y.csv
+  TOP_K: ${{ github.event.inputs.top_k }}
 
 jobs:
   run:
@@ -123,8 +128,25 @@ jobs:
         env:
           CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
           TARGET_FILE: ${{ env.TARGET_FILE }}
+          TOP_K: ${{ env.TOP_K }}
         run: |
           python scripts/update_crime.py
+
+      # (Opsiyonel) CSV → Parquet toparlama, eğer script Parquet üretmiyorsa
+      - name: Ensure Parquet exists
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "${{ env.CRIME_DATA_DIR }}/sf_crime_y.parquet" ] && [ -f "${{ env.CRIME_DATA_DIR }}/sf_crime_y.csv" ]; then
+            python - <<'PY'
+import pandas as pd, os
+p=os.environ["CRIME_DATA_DIR"]
+df=pd.read_csv(os.path.join(p,"sf_crime_y.csv"))
+df.to_parquet(os.path.join(p,"sf_crime_y.parquet"), index=False)
+print("Parquet created from CSV.")
+PY
+          fi
 
       # --- Sonuçları artifact olarak yükle (CSV + Parquet) ---
       - name: Upload artifact (sf_crime_y.{csv,parquet})
