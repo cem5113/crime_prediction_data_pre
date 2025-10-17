@@ -93,7 +93,6 @@ RAW_911_URL_ENV = os.getenv("RAW_311_URL", "").strip()
 RAW_911_URL_CANDIDATES = [
     RAW_311_URL_ENV or "",
     "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v3.0.0/sf_311_last_5_years_y.csv",
-    "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v3.0.0/sf_311_last_5_years.csv",
 ]
 
 # ================== SOCRATA ==================
