@@ -65,7 +65,7 @@ def freedman_diaconis_bin_count(data: np.ndarray, max_bins: int = 10) -> int:
 # =========================
 # ENV / Yollar
 # =========================
-BASE_DIR = os.getenv("CRIME_DATA_DIR", "crime_prediction_data")
+BASE_DIR = os.getenv("CRIME_DATA_DIR", "crime_prediction_data_pre")
 Path(BASE_DIR).mkdir(parents=True, exist_ok=True)
 
 # Suç girdisi adayları
