@@ -201,49 +201,90 @@ def fetch_file_from_latest_artifact(pick_names: list[str], artifact_name="sf-cri
                         return zf.read(n)
     return None
     
-def dispatch_workflow(wf_selector: str, persist="artifact", force=True, top_k="50", ref="main"):
-    import json as _json, base64
+def dispatch_workflow(persist="artifact", force=True, top_k="50", wf_selector: Optional[str]=None, ref: Optional[str]=None):
+    import base64
+
     base = f"https://api.github.com/repos/{GITHUB_REPO}"
     headers = _gh_headers()
 
-    # 1) Workflow listesinde eşle: path (endswith), isim (name) veya id
-    lst = requests.get(f"{base}/actions/workflows", headers=headers, timeout=20).json()
-    wf_id = None; wf_path = None; wf_state = None
-    for w in lst.get("workflows", []):
-        if (
-            str(w.get("id")) == str(wf_selector)
-            or w.get("name","") == wf_selector
-            or w.get("path","").endswith(f"/{wf_selector}")
-        ):
-            wf_id = w["id"]; wf_path = w.get("path"); wf_state = w.get("state"); break
+    # 0) Ref yoksa repo default_branch'ı al
+    if not ref:
+        repo_meta = requests.get(base, headers=headers, timeout=20).json()
+        ref = repo_meta.get("default_branch", "main")
+
+    # 1) Hangi workflow? (id / dosya adı / görünen ad)
+    wf_input = wf_selector or GITHUB_WORKFLOW  # örn: "full_pipeline.yml" ya da "Full SF Crime Pipeline" ya da "198276037"
+    wf_id = None
+    wf_path = None
+    wf_state = None
+
+    # Doğrudan sayıysa id kabul et
+    if re.fullmatch(r"\d+", str(wf_input or "")):
+        wf_id = str(wf_input)
+        meta = requests.get(f"{base}/actions/workflows/{wf_id}", headers=headers, timeout=20).json()
+        wf_state = meta.get("state")
+        wf_path = meta.get("path")
+    else:
+        # Listele ve path/name eşleştir
+        lst = requests.get(f"{base}/actions/workflows", headers=headers, timeout=20).json()
+        for w in lst.get("workflows", []):
+            if w.get("path","").endswith(f"/{wf_input}") or w.get("name","") == wf_input or w.get("path","") == wf_input:
+                wf_id = w.get("id")
+                wf_state = w.get("state")
+                wf_path = w.get("path")
+                break
 
     if not wf_id:
-        return {"ok": False, "status": 404, "text": f"Workflow bulunamadı: {wf_selector}"}
+        return {"ok": False, "status": 404, "text": f"Workflow bulunamadı: {wf_input}"}
 
-    # 2) İçeriği kontrol et: gerçekten workflow_dispatch var mı?
-    yml = requests.get(f"{base}/contents/{wf_path}", headers=headers, timeout=20).json()
+    # 2) Seçilen ref’te yaml içeriğini getir ve workflow_dispatch var mı bak
+    yml_resp = requests.get(f"{base}/contents/{wf_path}?ref={ref}", headers=headers, timeout=20)
+    if yml_resp.status_code != 200:
+        return {"ok": False, "status": yml_resp.status_code, "text": f"İçerik alınamadı (ref={ref})"}
+
+    yml_json = yml_resp.json()
     content = ""
     try:
-        if "content" in yml:
-            content = base64.b64decode(yml["content"]).decode("utf-8","ignore")
+        if "content" in yml_json:
+            content = base64.b64decode(yml_json["content"]).decode("utf-8", "ignore")
     except Exception:
         pass
-    has_dispatch = "workflow_dispatch" in content
 
-    # 3) Dispatch (ref = seçilen branch)
-    payload = {"ref": ref, "inputs": {"persist": persist, "force": "true" if force else "false", "top_k": top_k}}
+    # Basit ama sağlam bir kontrol (yorum satırları/indent farklarıyla false positive azaltmak için ^\s* ile)
+    has_dispatch = bool(re.search(r"(?m)^\s*workflow_dispatch\s*:\s*$", content))
+    if not has_dispatch:
+        return {
+            "ok": False,
+            "status": 422,
+            "text": f"Seçilen ref='{ref}' içindeki '{wf_path}' dosyasında workflow_dispatch yok.",
+            "wf_id": wf_id,
+            "state": wf_state,
+            "path": wf_path,
+            "ref": ref,
+        }
+
+    # 3) dispatch
+    payload = {
+        "ref": ref,
+        "inputs": {
+            "persist": persist,
+            "force": "true" if force else "false",
+            "top_k": top_k
+        }
+    }
     resp = requests.post(f"{base}/actions/workflows/{wf_id}/dispatches", headers=headers, json=payload, timeout=30)
+
     return {
         "ok": resp.status_code in (204, 201),
         "status": resp.status_code,
         "text": resp.text,
         "wf_id": wf_id,
         "state": wf_state,
-        "has_dispatch": has_dispatch,
         "path": wf_path,
         "ref": ref,
+        "has_dispatch": has_dispatch,
     }
-    
+
 def _get_last_run_by_workflow():
     url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW}/runs?per_page=1"
     r = requests.get(url, headers=_gh_headers(), timeout=30)
@@ -997,9 +1038,19 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"Hata: {e}")
 
-    with col_refresh:
-        if st.button("📡 Son durumu yenile"):
-            _render_last_run_status(status_box)
+    with st.sidebar.expander("Workflow seçimi", True):
+        wf_default = str(os.environ.get("GITHUB_WORKFLOW", "full_pipeline.yml"))
+        wf_selector = st.text_input(
+            "Workflow (ad / dosya / id)",
+            value=wf_default,
+            help="Örn: full_pipeline.yml • Full SF Crime Pipeline • 198276037"
+        )
+        ref_default = os.environ.get("GITHUB_REF_NAME", "") or os.environ.get("GITHUB_BRANCH", "") or "main"
+        ref_branch = st.text_input("Ref/branch", value=ref_default, help="Örn: main, master veya bir tag")
+        
+        with col_refresh:
+            if st.button("📡 Son durumu yenile"):
+                _render_last_run_status(status_box)
 
     with st.sidebar.expander("ACS Ayarları (Demografi)"):
         acs_year_default = os.environ.get("ACS_YEAR", "LATEST")
