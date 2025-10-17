@@ -45,7 +45,6 @@ NEIGHBOR_RADIUS_M = float(os.getenv("NEIGHBOR_RADIUS_M", "500"))
 CRIME_BASE_URL = os.getenv(
     "CRIME_CSV_URL",
     "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v2.0.0/sf_crime.csv"  
-    "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v2.0.0/sf_crime_y.csv"  
 )
 CRIME_API_URL = os.getenv("CRIME_API_URL", "https://data.sfgov.org/resource/wg3w-h783.json")
 SFCRIME_APP_TOKEN = os.getenv("SFCRIME_API_TOKEN", "")
