@@ -88,6 +88,14 @@ TODAY          = datetime.utcnow().date()
 DEFAULT_START  = TODAY - timedelta(days=FIVE_YEARS)
 BACKFILL_DAYS  = int(os.getenv("BACKFILL_DAYS", "0"))
 
+# Release taban URL — `_y` ÖNCELİKLİ, sonra eski ada düş
+RAW_911_URL_ENV = os.getenv("RAW_311_URL", "").strip()
+RAW_911_URL_CANDIDATES = [
+    RAW_311_URL_ENV or "",
+    "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v3.0.0/sf_311_last_5_years_y.csv",
+    "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v3.0.0/sf_311_last_5_years.csv",
+]
+
 # ================== SOCRATA ==================
 def socrata_get(session: requests.Session, url, params):
     headers = {"Accept": "application/json"}
