@@ -122,8 +122,7 @@ SF911_RECENT_HOURS = int(os.getenv("SF911_RECENT_HOURS", "6"))
 RAW_911_URL_ENV = os.getenv("RAW_911_URL", "").strip()
 RAW_911_URL_CANDIDATES = [
     RAW_911_URL_ENV or "",
-    "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.1/sf_911_last_5_year_y.csv",
-    "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.1/sf_911_last_5_year.csv",
+    "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.0/sf_911_last_5_year_y.csv",
 ]
 
 def _pick_working_release_url(candidates: list[str]) -> str:
