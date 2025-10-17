@@ -64,7 +64,7 @@ jobs:
           git lfs install
           git lfs pull
           echo "Repo root:"; ls -lah
-          echo "crime_prediction_data_per:"; ls -lah crime_prediction_data_per || true
+          echo "crime_prediction_data_pre:"; ls -lah crime_prediction_data_pre || true
 
       - name: Ensure data dir
         run: mkdir -p "${CRIME_DATA_DIR}"
