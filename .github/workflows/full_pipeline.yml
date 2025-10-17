@@ -78,6 +78,9 @@ jobs:
       - name: Ensure data dir
         run: mkdir -p "${CRIME_DATA_DIR}"
 
+      - name: Backward-compat symlink for scripts that hardcode 'crime_prediction_data'
+        run: ln -sfn "$CRIME_DATA_DIR" crime_prediction_data
+
       # --- SF 07:00 kapısı (TZ ayarla + saat kontrolü) ---
       - name: Set runner timezone to America/Los_Angeles
         uses: szenius/set-timezone@v2.0
@@ -363,12 +366,23 @@ jobs:
             "${CRIME_DATA_DIR}/sf_crime_04.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_04.csv" || { echo "❌ POI adımı için girdi yok"; exit 2; }
           echo "CRIME_INPUT=$CRIME_INPUT"
-          if [ -f update_poi.py ]; then python -u update_poi.py;
-          elif [ -f pipeline_make_sf_crime_06.py ]; then python -u pipeline_make_sf_crime_06.py;
-          else echo "❌ POI script bulunamadı"; exit 2; fi
+      
+          # 👇 script CRIME_IN env'ini okuyorsa kullansın
+          export CRIME_IN="$CRIME_INPUT"
+      
+          # 👇 script hard-coded 'crime_prediction_data/...' ararsa symlink zaten hazır (önceki adımda)
+          if [ -f update_poi.py ]; then
+            python -u update_poi.py
+          elif [ -f pipeline_make_sf_crime_06.py ]; then
+            python -u pipeline_make_sf_crime_06.py
+          else
+            echo "❌ POI script bulunamadı"; exit 2
+          fi
+      
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_06.parquet"
           OUT_CSV="${CRIME_DATA_DIR}/sf_crime_06.csv"
           test -f "$OUT_PARQ" -o -f "$OUT_CSV" || { echo "❌ POI çıktısı yok (sf_crime_06.*)"; exit 2; }
+
 
       - name: 08) Polis & Devlet binaları → sf_crime_07.parquet
         if: ${{ steps.gate.outputs.proceed == 'true' }}
