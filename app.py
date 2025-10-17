@@ -202,13 +202,9 @@ def fetch_file_from_latest_artifact(pick_names: list[str], artifact_name="sf-cri
     return None
     
 def dispatch_workflow(persist: str = "artifact", force: bool = True, top_k: str = "50") -> dict:
-    import json as _json
     url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW}/dispatches"
-    payload = {
-        "ref": "main",
-        "inputs": {"persist": persist, "force": "true" if force else "false", "top_k": top_k}
-    }
-    r = requests.post(url, headers=_gh_headers(), data=_json.dumps(payload), timeout=30)
+    payload = {"ref": "main", "inputs": {"persist": persist, "force": "true" if force else "false", "top_k": top_k}}
+    r = requests.post(url, headers=_gh_headers(), json=payload, timeout=30)  # <-- json=payload
     return {"ok": r.status_code in (204, 201), "status": r.status_code, "text": r.text}
 
 def _get_last_run_by_workflow():
@@ -938,13 +934,14 @@ with st.sidebar:
                 st.error("GH_TOKEN tanımlı değil.")
             else:
                 try:
-                    r = dispatch_workflow()
+                    r = dispatch_workflow(persist=persist, force=force_bypass, top_k="50")  # <-- UI değerlerini geçir
                     if r["ok"]:
                         st.success(f"Workflow tetiklendi (persist={persist}, force={force_bypass}).")
                     else:
                         st.error(f"Tetikleme başarısız: {r['status']} {r['text']}")
                 except Exception as e:
                     st.error(f"Hata: {e}")
+
     with col_refresh:
         if st.button("📡 Son durumu yenile"):
             _render_last_run_status(status_box)
