@@ -901,6 +901,86 @@ if st.button("📦 requirements.txt yükle"):
     except Exception as e:
         st.error(f"Kurulum çağrısı başarısız: {e}")
 
+def build_grid_full_labeled_from_sf_crime_y(
+    src_path: Path = DATA_DIR / "sf_crime_y.csv",
+    out_path: Path = DATA_DIR / "sf_crime_grid_full_labeled.csv",
+) -> Optional[Path]:
+    """
+    sf_crime_y.csv içinden GEOID × (season, day_of_week, event_hour) bazında Y_label'ları toplar
+    ve sf_crime_grid_full_labeled.csv olarak yazar. Eğer anahtar kolonlardan bazıları yoksa
+    mevcut olanlarla gruplar. Y_label yok ise crime_count>0 üzerinden türetir.
+    """
+    try:
+        if not src_path.exists():
+            st.warning(f"❗ Girdi bulunamadı: {src_path}")
+            return None
+
+        df = pd.read_csv(src_path, low_memory=False)
+
+        # GEOID normalize
+        if "GEOID" not in df.columns:
+            st.error("sf_crime_y.csv içinde GEOID kolonu yok.")
+            return None
+        df["GEOID"] = _norm_geoid(df["GEOID"])
+
+        # Tarih alanından (gerekirse) season/day_of_week/event_hour üretme (opsiyonel/sağlamlaştırma)
+        if "date" in df.columns and "season" not in df.columns:
+            _dt = pd.to_datetime(df["date"], errors="coerce")
+            month = _dt.dt.month
+            season_map = {12: "winter", 1: "winter", 2: "winter",
+                          3: "spring", 4: "spring", 5: "spring",
+                          6: "summer", 7: "summer", 8: "summer",
+                          9: "fall", 10: "fall", 11: "fall"}
+            df["season"] = month.map(season_map)
+        if "date" in df.columns and "day_of_week" not in df.columns:
+            _dt = pd.to_datetime(df["date"], errors="coerce")
+            df["day_of_week"] = _dt.dt.dayofweek  # 0=Mon ... 6=Sun
+        if "datetime" in df.columns and "event_hour" not in df.columns:
+            _dt2 = pd.to_datetime(df["datetime"], errors="coerce")
+            df["event_hour"] = _dt2.dt.hour
+        if "event_hour" not in df.columns and "hour" in df.columns:
+            df["event_hour"] = pd.to_numeric(df["hour"], errors="coerce")
+
+        # Etiket kolonu belirle
+        label_col = None
+        for c in ["Y_label", "y_label", "label"]:
+            if c in df.columns:
+                label_col = c
+                break
+        if label_col is None:
+            # Y_label yoksa crime_count üzerinden türet
+            if "crime_count" in df.columns:
+                df["Y_label"] = (pd.to_numeric(df["crime_count"], errors="coerce").fillna(0) > 0).astype(int)
+                label_col = "Y_label"
+            else:
+                st.error("Ne Y_label ne de crime_count bulundu. Üretim atlandı.")
+                return None
+
+        # Anahtarlar: mevcut olanlarla sınırlı tut
+        keys = [c for c in ["GEOID", "season", "day_of_week", "event_hour"] if c in df.columns]
+        if "GEOID" not in keys:
+            st.error("GEOID anahtarlar arasında olmalı.")
+            return None
+
+        # Grupla ve Y_label = max (herhangi 1 varsa 1)
+        g = (df.groupby(keys, as_index=False)[label_col]
+                .max()
+                .rename(columns={label_col: "Y_label"}))
+
+        # Türleri toparla
+        if "day_of_week" in g.columns:
+            g["day_of_week"] = pd.to_numeric(g["day_of_week"], errors="coerce").astype("Int64")
+        if "event_hour" in g.columns:
+            g["event_hour"] = pd.to_numeric(g["event_hour"], errors="coerce").astype("Int64")
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        g.to_csv(out_path, index=False)
+        st.success(f"✅ sf_crime_grid_full_labeled.csv üretildi → {out_path} (satır: {len(g)})")
+        return out_path
+    except Exception as e:
+        st.error(f"sf_crime_grid_full_labeled oluşturulamadı: {e}")
+        return None
+
 # -----------------------------------------------------------------------------
 # Yardımcı: indir & önizle
 # -----------------------------------------------------------------------------
@@ -972,7 +1052,13 @@ if st.button("📥 Verileri İndir ve Önizle (İlk 3 Satır)"):
             allow_artifact_fallback=info.get("allow_artifact", False),
             artifact_picks=info.get("artifact_picks"),
         )
+
+    build_grid_full_labeled_from_sf_crime_y(
+        src_path=DATA_DIR / "sf_crime_y.csv",
+        out_path=DATA_DIR / "sf_crime_grid_full_labeled.csv"
+    )
     st.success("✅ İndirme tamamlandı.")
+
 
 st.markdown("### 1.5) Dosyaları tarihe göre sırala")
 def convert_csv_dir_to_parquet(
@@ -1183,6 +1269,16 @@ if st.button("⚙️ Güncelleme ve Zenginleştirme (01 → 09)"):
                 continue
             ok = run_script(sp)
             all_ok = all_ok and ok
+
+        # ⬇️ PIPELINE SONRASI: sf_crime_y.csv → sf_crime_grid_full_labeled.csv üret
+        try:
+            build_grid_full_labeled_from_sf_crime_y(
+                src_path=DATA_DIR / "sf_crime_y.csv",
+                out_path=DATA_DIR / "sf_crime_grid_full_labeled.csv"
+            )
+        except Exception as e:
+            st.warning(f"grid dosyası üretimi atlandı: {e}")
+
         if all_ok:
             st.success("🎉 Pipeline bitti: Tüm adımlar başarıyla tamamlandı.")
         else:
