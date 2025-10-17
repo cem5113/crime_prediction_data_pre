@@ -132,9 +132,9 @@ def pick_url(key: str, default: str) -> str:
         pass
     return os.getenv(key, default)
 
-CRIME_CSV_LATEST = pick_url("CRIME_CSV_URL", "https://github.com/cem5113/crime_prediction_data_pre/releases/latest/download/sf_crime_y.csv")
-RAW_911_URL = pick_url("RAW_911_URL", "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.1/sf_911_last_5_year_y.csv")
-SF311_URL = pick_url("SF311_URL", "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.2/sf_311_last_5_years_y.csv")
+CRIME_CSV_LATEST = pick_url("CRIME_CSV_URL", "https://github.com/cem5113/crime_prediction_data_pre/main/sf_crime_y.csv")
+RAW_911_URL = pick_url("RAW_911_URL", "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.0/sf_911_last_5_year_y.csv")
+SF311_URL = pick_url("SF311_URL", "https://github.com/cem5113/crime_prediction_data_pre/main/sf_311_last_5_years_y.csv")
 
 DEFAULT_POP_CSV = str((Path(os.environ.get("CRIME_DATA_DIR", "crime_prediction_data_pre")) / "sf_population.csv").resolve())
 POPULATION_PATH = pick_url("POPULATION_PATH", DEFAULT_POP_CSV)
