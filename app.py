@@ -131,11 +131,11 @@ def pick_url(key: str, default: str) -> str:
         pass
     return os.getenv(key, default)
 
-CRIME_CSV_LATEST = pick_url("CRIME_CSV_URL", "https://github.com/cem5113/crime_prediction_data/releases/latest/download/sf_crime_y.csv")
-RAW_911_URL = pick_url("RAW_911_URL", "https://github.com/cem5113/crime_prediction_data/releases/download/v1.0.1/sf_911_last_5_year_y.csv")
-SF311_URL = pick_url("SF311_URL", "https://github.com/cem5113/crime_prediction_data/releases/download/v1.0.2/sf_311_last_5_years_y.csv")
+CRIME_CSV_LATEST = pick_url("CRIME_CSV_URL", "https://github.com/cem5113/crime_prediction_data_pre/releases/latest/download/sf_crime_y.csv")
+RAW_911_URL = pick_url("RAW_911_URL", "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.1/sf_911_last_5_year_y.csv")
+SF311_URL = pick_url("SF311_URL", "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.2/sf_311_last_5_years_y.csv")
 
-DEFAULT_POP_CSV = str((Path(os.environ.get("CRIME_DATA_DIR", "crime_prediction_data")) / "sf_population.csv").resolve())
+DEFAULT_POP_CSV = str((Path(os.environ.get("CRIME_DATA_DIR", "crime_prediction_data_pre")) / "sf_population.csv").resolve())
 POPULATION_PATH = pick_url("POPULATION_PATH", DEFAULT_POP_CSV)
 if re.match(r"^https?://", str(POPULATION_PATH), flags=re.I):
     POPULATION_PATH = DEFAULT_POP_CSV
@@ -170,7 +170,7 @@ if SOCS_APP_TOKEN:
 os.environ["ACS_YEAR"] = st.secrets.get("ACS_YEAR", os.environ.get("ACS_YEAR", "LATEST"))
 os.environ["DEMOG_WHITELIST"] = st.secrets.get("DEMOG_WHITELIST", os.environ.get("DEMOG_WHITELIST", ""))
 
-GITHUB_REPO = os.environ.get("GITHUB_REPO", "cem5113/crime_prediction_data")
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "cem5113/crime_prediction_data_pre")
 GITHUB_WORKFLOW = os.environ.get("GITHUB_WORKFLOW", "full_pipeline.yml")
 
 def _gh_headers():
@@ -192,7 +192,7 @@ def fetch_file_from_latest_artifact(pick_names: list[str], artifact_name="sf-cri
                 zf = zipfile.ZipFile(io.BytesIO(dl.content))
                 names = zf.namelist()
                 for pick in pick_names:
-                    for c in (pick, f"crime_prediction_data/{pick}"):
+                    for c in (pick, f"crime_prediction_data_pre/{pick}"):
                         if c in names:
                             return zf.read(c)
                 for n in names:
@@ -244,7 +244,7 @@ def fetch_latest_artifact_df() -> Optional[pd.DataFrame]:
                 if a.get("name") == "sf-crime-pipeline-output" and not a.get("expired", False):
                     dl = requests.get(a["archive_download_url"], headers=_gh_headers(), timeout=60)
                     zf = zipfile.ZipFile(io.BytesIO(dl.content))
-                    for pick in ("crime_prediction_data/sf_crime_08.csv", "sf_crime_08.csv"):
+                    for pick in ("crime_prediction_data_pre/sf_crime_08.csv", "sf_crime_08.csv"):
                         if pick in zf.namelist():
                             with zf.open(pick) as f:
                                 df = pd.read_csv(f, low_memory=False)
@@ -265,7 +265,7 @@ try:
     ROOT = Path(__file__).resolve().parent
 except NameError:
     ROOT = Path.cwd()
-DATA_DIR = ROOT / "crime_prediction_data"
+DATA_DIR = ROOT / "crime_prediction_data_pre"
 SCRIPTS_DIR = ROOT / "scripts"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -287,7 +287,7 @@ DOWNLOADS = {
         "parquet_path": str(DATA_DIR / "sf_crime_y.parquet"),
     },
     "Tahmin Grid (CSV → Parquet)": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_crime_grid_full_labeled.csv",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_crime_grid_full_labeled.csv",
         "csv_path": str(DATA_DIR / "sf_crime_grid_full_labeled.csv"),
         "parquet_path": str(DATA_DIR / "sf_crime_grid_full_labeled.parquet"),
         "allow_artifact": True,
@@ -304,18 +304,18 @@ DOWNLOADS = {
         "parquet_path": str(DATA_DIR / "sf_311_last_5_years_y.parquet"),
     },
     "Otobüs Durakları (CSV → Parquet)": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_bus_stops_with_geoid.csv",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_bus_stops_with_geoid.csv",
         "csv_path": str(DATA_DIR / "sf_bus_stops_with_geoid.csv"),
         "parquet_path": str(DATA_DIR / "sf_bus_stops_with_geoid.parquet"),
     },
     "Tren Durakları (CSV → Parquet)": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_train_stops_with_geoid.csv",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_train_stops_with_geoid.csv",
         "csv_path": str(DATA_DIR / "sf_train_stops_with_geoid.csv"),
         "parquet_path": str(DATA_DIR / "sf_train_stops_with_geoid.parquet"),
     },
     # JSON dosyaları JSON olarak tutulur
     "POI GeoJSON (JSON)": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_pois.geojson",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_pois.geojson",
         "json_path": str(DATA_DIR / "sf_pois.geojson"),
         "is_json": True,
     },
@@ -327,22 +327,22 @@ DOWNLOADS = {
         "is_local_csv": True,
     },
     "POI Risk Skorları (JSON)": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/risky_pois_dynamic.json",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/risky_pois_dynamic.json",
         "json_path": str(DATA_DIR / "risky_pois_dynamic.json"),
         "is_json": True,
     },
     "Polis İstasyonları (CSV → Parquet)": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_police_stations.csv",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_police_stations.csv",
         "csv_path": str(DATA_DIR / "sf_police_stations.csv"),
         "parquet_path": str(DATA_DIR / "sf_police_stations.parquet"),
     },
     "Devlet Binaları (CSV → Parquet)": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_government_buildings.csv",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_government_buildings.csv",
         "csv_path": str(DATA_DIR / "sf_government_buildings.csv"),
         "parquet_path": str(DATA_DIR / "sf_government_buildings.parquet"),
     },
     "Hava Durumu (CSV → Parquet)": {
-        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data/main/sf_weather_5years_y.csv",
+        "url": "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_weather_5years_y.csv",
         "csv_path": str(DATA_DIR / "sf_weather_5years_y.csv"),
         "parquet_path": str(DATA_DIR / "sf_weather_5years_y.parquet"),
     },
