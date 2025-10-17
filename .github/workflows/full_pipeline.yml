@@ -317,12 +317,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./pick_input.sh CRIME_INPUT \
+          . ./pick_input.sh CRIME_INPUT \
             "${CRIME_DATA_DIR}/sf_crime_03.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_03.csv" \
             "${CRIME_DATA_DIR}/sf_crime.parquet" \
             "${CRIME_DATA_DIR}/sf_crime.csv" || { echo "❌ Bus adımı için girdi yok"; exit 2; }
-          export CRIME_INPUT
+          eval "$(./pick_input.sh CRIME_INPUT "${CRIME_DATA_DIR}/sf_crime_03.parquet" ... )"
           echo "CRIME_INPUT=$CRIME_INPUT"
           python -u update_bus.py
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_04.parquet"
