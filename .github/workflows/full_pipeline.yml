@@ -195,66 +195,6 @@ jobs:
           set -e
           python -u update_crime.py
 
-      # --- YENİ ADIM: sf_crime.csv + sf_crime_y.csv → sf_crime_grid_full_labeled.csv ---
-      - name: 01.5) X+Y birleştir → sf_crime_grid_full_labeled.csv
-        if: ${{ steps.gate.outputs.proceed == 'true' }}
-        env:
-          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
-        run: |
-          set -euo pipefail
-          X="${CRIME_DATA_DIR}/sf_crime.csv"
-          Y="${CRIME_DATA_DIR}/sf_crime_y.csv"
-          OUT="${CRIME_DATA_DIR}/sf_crime_grid_full_labeled.csv"
-
-          test -f "$X" || { echo "❌ sf_crime.csv yok: $X"; exit 2; }
-          test -f "$Y" || { echo "❌ sf_crime_y.csv yok: $Y"; exit 2; }
-
-          python - <<'PY'
-          import os, pandas as pd, re
-          CRIME_DATA_DIR = os.environ.get("CRIME_DATA_DIR","crime_prediction_data")
-          Xp = os.path.join(CRIME_DATA_DIR,"sf_crime.csv")
-          Yp = os.path.join(CRIME_DATA_DIR,"sf_crime_y.csv")
-          Op = os.path.join(CRIME_DATA_DIR,"sf_crime_grid_full_labeled.csv")
-
-          X = pd.read_csv(Xp, low_memory=False)
-          Y = pd.read_csv(Yp, low_memory=False)
-
-          # sütun adlarını küçük harfe indirip orijinal ad eşlemesi tut
-          xmap = {c.lower(): c for c in X.columns}
-          ymap = {c.lower(): c for c in Y.columns}
-
-          # Y label sütunu adı (y_label / ylabel varyantları için esnek)
-          ylab_key = 'y_label' if 'y_label' in ymap else ('ylabel' if 'ylabel' in ymap else None)
-          if not ylab_key:
-            raise SystemExit("Y label sütunu bulunamadı (beklenen: y_label/ylabel)")
-
-          # Birleşme anahtarları: ortak sütunların kesişimi (label hariç)
-          keys = sorted((set(xmap.keys()) & set(ymap.keys())) - {ylab_key})
-
-          if not keys:
-            raise SystemExit(f"Birleşme için ortak anahtar bulunamadı. X={list(X.columns)[:8]}… Y={list(Y.columns)[:8]}…")
-
-          X_keys = [xmap[k] for k in keys]
-          Y_keys = [ymap[k] for k in keys]
-
-          # Y yalnızca anahtarlar + Y_label
-          Ysub = Y[[*Y_keys, ymap[ylab_key]]].rename(columns={ymap[ylab_key]:"Y_label"})
-
-          M = X.merge(Ysub, left_on=X_keys, right_on=Y_keys, how="left")
-
-          # Emniyet için boş kalanları 0 yap (tam grid bekleniyor)
-          if "Y_label" not in M.columns:
-              M["Y_label"] = 0
-          M["Y_label"] = M["Y_label"].fillna(0).astype(int)
-
-          M.to_csv(Op, index=False)
-          print(f"Wrote: {Op} | rows={len(M)} | cols={M.shape[1]}")
-          print("Keys used for merge:", X_keys)
-          PY
-
-          echo "sf_crime_grid_full_labeled.csv — ilk 5 satır:"
-          head -n 5 "$OUT" || true
-
       - name: Restore 911 summary cache
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         uses: actions/cache@v4
@@ -325,6 +265,57 @@ jobs:
         run: |
           set -e
           python -u update_911.py
+
+      - name: 02.4) 01 + Y birleştir → sf_crime_grid_full_labeled.csv
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
+        run: |
+          set -euo pipefail
+          X="${CRIME_DATA_DIR}/sf_crime_01.csv"
+          Y="${CRIME_DATA_DIR}/sf_crime_y.csv"
+          OUT="${CRIME_DATA_DIR}/sf_crime_grid_full_labeled.csv"
+      
+          test -f "$X" || { echo "❌ sf_crime_01.csv yok: $X"; exit 2; }
+          test -f "$Y" || { echo "❌ sf_crime_y.csv yok: $Y"; exit 2; }
+      
+          python - <<'PY'
+          import os, pandas as pd, re
+          CRIME_DATA_DIR = os.environ.get("CRIME_DATA_DIR","crime_prediction_data")
+          Xp = os.path.join(CRIME_DATA_DIR,"sf_crime_01.csv")
+          Yp = os.path.join(CRIME_DATA_DIR,"sf_crime_y.csv")
+          Op = os.path.join(CRIME_DATA_DIR,"sf_crime_grid_full_labeled.csv")
+      
+          X = pd.read_csv(Xp, low_memory=False)
+          Y = pd.read_csv(Yp, low_memory=False)
+      
+          xmap = {c.lower(): c for c in X.columns}
+          ymap = {c.lower(): c for c in Y.columns}
+      
+          ylab_key = 'y_label' if 'y_label' in ymap else ('ylabel' if 'ylabel' in ymap else None)
+          if not ylab_key:
+            raise SystemExit("Y label sütunu bulunamadı (beklenen: y_label/ylabel)")
+      
+          keys = sorted((set(xmap.keys()) & set(ymap.keys())) - {ylab_key})
+          if not keys:
+            raise SystemExit("Birleşme için ortak anahtar bulunamadı (01∩Y).")
+      
+          X_keys = [xmap[k] for k in keys]
+          Y_keys = [ymap[k] for k in keys]
+          Ysub = Y[[*Y_keys, ymap[ylab_key]]].rename(columns={ymap[ylab_key]:"Y_label"})
+      
+          M = X.merge(Ysub, left_on=X_keys, right_on=Y_keys, how="left", validate="m:1")
+          M["Y_label"] = M.get("Y_label", 0)
+          M["Y_label"] = pd.to_numeric(M["Y_label"], errors="coerce").fillna(0).astype(int)
+      
+          M.to_csv(Op, index=False)
+          print(f"Wrote: {Op} | rows={len(M)} | cols={M.shape[1]}")
+          print("Keys used for merge:", X_keys)
+          PY
+      
+          echo "sf_crime_grid_full_labeled.csv — ilk 5 satır:"
+          head -n 5 "$OUT" || true
+
 
       # --- YENİ: sf_crime_01L.csv = sf_crime_01.csv + (GEOID → Y_label) ---
       - name: 02.5) sf_crime_01L.csv üret (GEOID bazlı Y_label ekle)
