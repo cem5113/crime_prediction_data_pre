@@ -1,4 +1,4 @@
-name: Full SF Crime Pipeline (CSV → _y.csv priority + Parquet artifact)
+name: Full SF Crime Pipeline
 
 on:
   schedule:
@@ -11,7 +11,7 @@ on:
         options: [artifact, commit, none]
         default: artifact
       force:
-        description: "07:00 kuralını manuelde atla"
+        description: "07:00 kapısını yok say"
         type: boolean
         default: true
       top_k:
