@@ -1,4 +1,5 @@
 # .github/workflows/full_pipeline.yml
+# .github/workflows/full_pipeline.yml
 name: Full SF Crime Pipeline
 
 on:
@@ -47,26 +48,43 @@ jobs:
           echo "crime_prediction_data:"; ls -lah crime_prediction_data || true
           echo "CRIME_DATA_DIR:"; ls -lah "${CRIME_DATA_DIR}" || true
 
+      - name: System deps for geopandas/rtree
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libspatialindex-dev
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install deps
+      - name: Install Python deps
         run: |
-          python -m pip install -U pip
-          pip install pandas pyarrow
+          python -m pip install -U pip wheel setuptools
+          pip install -U pandas numpy requests holidays pyarrow
+          pip install -U "geopandas==1.0.1" "shapely==2.0.4" "pyproj==3.6.1" "pyogrio==0.9.0" "rtree==1.3.0"
 
-      # (İsteğe bağlı) Burada update scriptlerinizi çalıştırıyorsanız ekleyin
-      # - name: Run update pipeline
-      #   env:
-      #     CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
-      #     TOP_K: ${{ github.event.inputs.top_k }}
-      #   run: |
-      #     python scripts/update_crime.py
-      #     python scripts/generate_sf_crime_52.py
-      #     python scripts/generate_sf_crime_54.py
+      - name: Run update_crime.py (produce sf_crime.csv & grid)
+        env:
+          # === ÖNEMLİ: Y-only modu KAPALI ===
+          CACHE_WRITE_Y_ONLY: "0"
+          # Kaynak CSV (raw):
+          CRIME_CSV_URL: "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_crime.csv"
+          # Artifact araması için token (varsa): GH_PAT yoksa GitHub token kullan
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GITHUB_REPO: "cem5113/crime_prediction_data_pre"
+          GEOID_LEN: "11"
+          # İsteğe bağlı hız/akış ayarları (gerekirse aç)
+          SFCRIME_CHUNK_LIMIT: "50000"
+          SFCRIME_MAX_RETRIES: "4"
+          SFCRIME_SLEEP: "0.2"
+          SFCRIME_BULK_RANGE: "1"
+        run: |
+          set -e
+          python -u update_crime.py
+          echo "---- Çıktılar (root) ----"; ls -lah | sed -n '1,200p'
+          echo "---- Çıktılar (${CRIME_DATA_DIR}) ----"; ls -lah "${CRIME_DATA_DIR}" || true
 
       - name: Quick sanity read (sf_crime.csv)
         env:
@@ -74,19 +92,17 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import os, sys, pandas as pd, pathlib
+          import os, pathlib, pandas as pd
           base = pathlib.Path(os.environ.get("CRIME_DATA_DIR","crime_prediction_data"))
-          cands = [base/"sf_crime.csv", pathlib.Path("sf_crime.csv")]
-          p = next((c for c in cands if c.exists()), None)
-          if not p:
-            print("ℹ️ sf_crime.csv bulunamadı, sadece var olan dosyalar artifact'e eklenecek.", file=sys.stderr)
-          else:
-            df = pd.read_csv(p, nrows=5)
-            print(f"✅ Okundu: {p} | örnek satırlar={len(df)}")
-            print(df.head().to_string(index=False))
+          for p in [base/"sf_crime.csv", pathlib.Path("sf_crime.csv")]:
+              if p.exists():
+                  df = pd.read_csv(p, nrows=5)
+                  print(f"✅ Okundu: {p} | örnek satırlar={len(df)}")
+                  print(df.head().to_string(index=False))
+                  break
           PY
 
-      - name: Ensure Parquet for y & 54 (root and CRIME_DATA_DIR)
+      - name: Convert important CSVs → Parquet (root and CRIME_DATA_DIR)
         env:
           CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
         run: |
@@ -94,21 +110,23 @@ jobs:
           python - <<'PY'
           import os, pathlib, pandas as pd
           base = pathlib.Path(os.environ.get("CRIME_DATA_DIR","crime_prediction_data"))
-          targets = [
-            pathlib.Path("sf_crime_y.csv"),
-            pathlib.Path("sf_crime_54.csv"),
-            base/"sf_crime_y.csv",
-            base/"sf_crime_54.csv",
+          to_try = [
+              pathlib.Path("sf_crime.csv"),
+              pathlib.Path("sf_crime_y.csv"),
+              pathlib.Path("sf_crime_grid_full_labeled.csv"),
+              base/"sf_crime.csv",
+              base/"sf_crime_y.csv",
+              base/"sf_crime_grid_full_labeled.csv",
           ]
-          for csv in targets:
-            if csv.exists():
-              pq = csv.with_suffix(".parquet")
-              try:
-                df = pd.read_csv(csv, low_memory=False)
-                df.to_parquet(pq, index=False)
-                print(f"✅ Parquet: {pq}")
-              except Exception as e:
-                print(f"⚠️ Parquet üretilemedi: {csv} -> {e}")
+          for csv in to_try:
+              if csv.exists():
+                  pq = csv.with_suffix(".parquet")
+                  try:
+                      df = pd.read_csv(csv, low_memory=False)
+                      df.to_parquet(pq, index=False)
+                      print(f"✅ Parquet yazıldı: {pq}")
+                  except Exception as e:
+                      print(f"⚠️ Parquet üretilemedi: {csv} -> {e}")
           PY
 
       - name: Collect outputs for artifact
@@ -116,26 +134,32 @@ jobs:
           CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
         run: |
           set -euo pipefail
-          mkdir -p _artifacts
+          mkdir -p _artifacts "${CRIME_DATA_DIR}"
           # Kök dizin
-          for f in sf_crime.csv sf_crime_y.csv sf_crime_y.parquet sf_crime_54.csv sf_crime_54.parquet; do
+          for f in \
+            sf_crime.csv sf_crime.parquet \
+            sf_crime_y.csv sf_crime_y.parquet \
+            sf_crime_grid_full_labeled.csv sf_crime_grid_full_labeled.parquet \
+            ; do
             [ -f "$f" ] && cp -f "$f" _artifacts/ && echo "✔ root -> _artifacts/$f"
           done
           # CRIME_DATA_DIR altı
-          for f in sf_crime.csv sf_crime_y.csv sf_crime_y.parquet sf_crime_54.csv sf_crime_54.parquet; do
+          for f in \
+            sf_crime.csv sf_crime.parquet \
+            sf_crime_y.csv sf_crime_y.parquet \
+            sf_crime_grid_full_labeled.csv sf_crime_grid_full_labeled.parquet \
+            ; do
             if [ -f "${CRIME_DATA_DIR}/$f" ]; then
               mkdir -p "_artifacts/${CRIME_DATA_DIR}"
               cp -f "${CRIME_DATA_DIR}/$f" "_artifacts/${CRIME_DATA_DIR}/"
               echo "✔ ${CRIME_DATA_DIR}/$f -> _artifacts/${CRIME_DATA_DIR}/$f"
             fi
           done
-
           echo "📦 İçerik:"
-          ls -lah _artifacts || true
-
-          # Hiçbir dosya toplanamadıysa fail verelim:
-          if [ -z "$(find _artifacts -type f -maxdepth 2 2>/dev/null)" ]; then
-            echo "❌ Yüklenecek dosya bulunamadı. Scriptler dosyaları üretiyor mu ve doğru klasöre yazıyor mu?"
+          find _artifacts -type f -maxdepth 3 -print | sed -n '1,200p'
+          # En az bir dosya olsun
+          if [ -z "$(find _artifacts -type f 2>/dev/null)" ]; then
+            echo "❌ Yüklenecek dosya bulunamadı. update_crime.py çıktıları üretiyor mu?"
             exit 3
           fi
 
@@ -147,4 +171,14 @@ jobs:
           path: _artifacts
           if-no-files-found: error
           retention-days: 14
+
+      - name: Commit & push (opsiyonel)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'commit' }}
+        run: |
+          set -e
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "🔄 update_crime.py outputs" || echo "No changes"
+          git push || echo "Nothing to push"
 
