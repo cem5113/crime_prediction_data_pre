@@ -27,7 +27,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CRIME_DATA_DIR: crime_prediction_data_per
+  RIME_DATA_DIR: crime_prediction_data_pre 
   GEOID_LEN: "10"
   USE_PARQUET: "1"
   Y_PARQUET_COMPRESSION: "zstd"
