@@ -47,7 +47,7 @@ def _env_flag(name: str, default: bool = False) -> int:
     return 1 if str(v).strip().lower() in {"1", "true", "yes", "y", "on"} else 0
 
 
-CRIME_DIR   = os.getenv("CRIME_DATA_DIR", "crime_prediction_data")
+CRIME_DIR   = os.getenv("CRIME_DATA_DIR", "crime_prediction_data_pre")
 GEOID_LEN   = int(os.getenv("GEOID_LEN", "11"))
 TRAIN_PHASE = os.getenv("TRAIN_PHASE", "select").strip().lower()  # select | final
 CV_JOBS     = int(os.getenv("CV_JOBS", "4"))
