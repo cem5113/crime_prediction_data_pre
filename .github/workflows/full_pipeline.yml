@@ -2,13 +2,21 @@ name: Full SF Crime Pipeline (CSV → _y.csv priority + Parquet artifact)
 
 on:
   schedule:
-    - cron: "0 14,15 * * *"        # SF 07:00 → 14/15 UTC
+    - cron: "0 14,15 * * *"
   workflow_dispatch:
     inputs:
+      persist:
+        description: "Sonuçları nasıl saklayalım?"
+        type: choice
+        options: [artifact, commit, none]
+        default: artifact
       force:
-        description: "Manuel tetiklemede 07:00 kapısını YOK SAY"
+        description: "07:00 kapısını yok say"
         type: boolean
         default: true
+      top_k:
+        description: "Stacking: saat başı kaç GEOID?"
+        default: "50"
 
 permissions:
   actions: read
