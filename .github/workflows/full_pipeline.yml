@@ -33,7 +33,8 @@ env:
   # I/O davranışı
   USE_PARQUET: "1"           # tüm ara çıktı & final çıktılar parquet
   ID_BASED: "1"              # satır = olay (ID), grid joinleri ID’den
-  LABEL_STYLE: "legacy01"    # Y_label = 0/1
+  LABEL_STYLE: "legacy01"    # Y_label = 0/1 (≥1 olay → 1)
+  Y_PARQUET_COMPRESSION: "zstd"   # *_y.parquet sıkıştırma
 
   # Horizonlar (forecast ön-hesap)
   HORIZONS: "24h,7d,30d,90d,365d"
@@ -139,9 +140,9 @@ jobs:
           # Geo
           pip install -U "geopandas==1.0.1" "shapely==2.0.4" "pyproj==3.6.1" "pyogrio==0.9.0" "rtree==1.3.0"
           # Parquet stack
-          pip install -U pyarrow polars
+          pip install -U pyarrow polars pandas numpy
           # ML
-          pip install -U pandas numpy scikit-learn joblib xgboost lightgbm
+          pip install -U scikit-learn joblib xgboost lightgbm
 
       - name: Geo stack smoke test
         if: ${{ steps.gate.outputs.proceed == 'true' }}
@@ -155,6 +156,58 @@ jobs:
           print("pandas", pandas.__version__)
           PY
 
+      # ------------- PREFETCH (opsiyonel) -------------
+      # Örn. önceki artifact'lardan CSV gelebilir (sf_crime_y.csv / sf_911_last_5_year_y.csv / sf_311_last_5_years_y.csv)
+      - name: 00) Prefetch common *_y files from previous successful runs (artifact)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: sf-crime-pipeline-output
+          WORKFLOW_NAME: Full SF Crime Pipeline (ID-based + Parquet + Category Forecast)
+          OUT_DIR: ${{ env.CRIME_DATA_DIR }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${OUT_DIR}" _prev
+          sudo apt-get update -y >/dev/null
+          sudo apt-get install -y unzip >/dev/null
+          if ! command -v gh >/dev/null; then
+            type -p curl >/dev/null && sudo curl -sSL https://raw.githubusercontent.com/cli/cli/trunk/script/install.sh | sh
+          fi
+          # Son birkaç başarılı run'ın artifact'larını indir ve _y.* dosyaları çıkar
+          RUNS=$(gh run list -R "${GITHUB_REPOSITORY}" --workflow "${WORKFLOW_NAME}" --status success -L 10 --json databaseId -q '.[].databaseId' || true)
+          for RID in ${RUNS}; do
+            echo "🔎 Run #$RID -> ${ARTIFACT_NAME}"
+            rm -rf "_prev/$RID" && mkdir -p "_prev/$RID"
+            if gh run download -R "${GITHUB_REPOSITORY}" "$RID" -n "${ARTIFACT_NAME}" -D "_prev/$RID" >/dev/null 2>&1; then
+              # sadece *_y.(csv|parquet) dosyalarını kopyala (varsa)
+              find "_prev/$RID" -type f \( -name "*_y.csv" -o -name "*_y.parquet" \) -print0 | xargs -0 -I{} cp -f "{}" "${OUT_DIR}/" || true
+            fi
+          done
+
+      # **YENİ:** Prefetch'ten veya repo'dan gelen tüm *_y.csv'leri -> *_y.parquet'e çevir (sıkıştırmalı) ve CSV'yi artık kullanma
+      - name: 00.c) Convert any *_y.csv → *_y.parquet (once) and prefer parquet going forward
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
+          Y_PARQUET_COMPRESSION: ${{ env.Y_PARQUET_COMPRESSION }}
+        run: |
+          python - <<'PY'
+          import os, glob
+          import pandas as pd
+          import pyarrow as pa, pyarrow.parquet as pq
+          d = os.environ["CRIME_DATA_DIR"]
+          comp = os.environ.get("Y_PARQUET_COMPRESSION","zstd")
+          for csv in glob.glob(os.path.join(d, "*_y.csv")):
+              parq = csv[:-4] + ".parquet"
+              try:
+                  df = pd.read_csv(csv, low_memory=False)
+              except Exception:
+                  continue
+              table = pa.Table.from_pandas(df)
+              pq.write_table(table, parq, compression=comp)
+              print(f"✓ {os.path.basename(csv)} → {os.path.basename(parq)}")
+          PY
+
       # ------------- PIPELINE (ID-based + parquet) -------------
       - name: 01) Suç tabanı ve grid → sf_crime.parquet + gridler
         if: ${{ steps.gate.outputs.proceed == 'true' }}
@@ -166,7 +219,94 @@ jobs:
           set -e
           python -u update_crime.py
           # Beklenen: ${CRIME_DATA_DIR}/sf_crime.parquet
-          #           ${CRIME_DATA_DIR}/sf_crime_grid_full_labeled.parquet
+          #           ${CRIME_DATA_DIR}/sf_crime_grid_full_labeled.parquet (ileride 01.b de de üretilebilir/güncellenir)
+
+      # ✅ YENİ: Olay→GEOID×Saat binary Y_label üret/merge; çıkış: sf_crime_y.parquet
+      - name: 01.b) GEOID×Saat Y_label üret/merge → sf_crime_y.parquet (+ grid_full_labeled)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        env:
+          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
+          GEOID_LEN: ${{ env.GEOID_LEN }}
+          LABEL_STYLE: legacy01
+          TIMEZONE: America/Los_Angeles
+          Y_PARQUET_COMPRESSION: ${{ env.Y_PARQUET_COMPRESSION }}
+        run: |
+          set -euo pipefail
+          cat > make_y_labels.py <<'PY'
+          from __future__ import annotations
+          import os, re
+          from pathlib import Path
+          import pandas as pd
+          import pyarrow as pa, pyarrow.parquet as pq
+
+          TZ = os.environ.get("TIMEZONE","America/Los_Angeles")
+          CRIME_DIR = Path(os.environ.get("CRIME_DATA_DIR","crime_prediction_data_per"))
+          GEOID_LEN = int(os.environ.get("GEOID_LEN","10"))
+          COMP = os.environ.get("Y_PARQUET_COMPRESSION","zstd")
+
+          def _norm_geoid(s: pd.Series, L:int)->pd.Series:
+              return (s.astype(str).str.extract(r"(\d+)",expand=False).fillna("").str.zfill(L).str[-L:])
+          def _pick(df, cands):
+              low={re.sub(r"[^a-z0-9]","",c.lower()):c for c in df.columns}
+              for c in cands:
+                  k=re.sub(r"[^a-z0-9]","",c.lower()); 
+                  if k in low: return low[k]
+          def _to_hour(s,tz):
+              s=pd.to_datetime(s, errors="coerce", utc=True)
+              return s.dt.tz_convert(tz).dt.floor("H")
+
+          # kaynaktan oku
+          inp = CRIME_DIR/"sf_crime.parquet"
+          if not inp.exists(): inp = CRIME_DIR/"sf_crime.csv"
+          if not inp.exists(): raise SystemExit("sf_crime not found")
+          df = pd.read_parquet(inp) if inp.suffix==".parquet" else pd.read_csv(inp, low_memory=False)
+
+          gcol=_pick(df,["GEOID","GEOID10","GEOID11","geography_id"])
+          tcol=_pick(df,["timestamp","incident_datetime","datetime","occurred_at","date"])
+          if not gcol or not tcol: raise SystemExit("missing GEOID/time columns")
+
+          df["GEOID"]=_norm_geoid(df[gcol], GEOID_LEN)
+          df["ts_hour"]=_to_hour(df[tcol], TZ)
+          df=df.dropna(subset=["GEOID","ts_hour"]).reset_index(drop=True)
+
+          # tam grid ve olay sayısı
+          hours=pd.date_range(df["ts_hour"].min(), df["ts_hour"].max(), freq="H")
+          geos=df["GEOID"].drop_duplicates().sort_values()
+          grid=pd.MultiIndex.from_product([geos,hours], names=["GEOID","ts_hour"]).to_frame(index=False)
+          hits=(df.groupby(["GEOID","ts_hour"]).size().rename("incident_count").reset_index())
+          new=grid.merge(hits, how="left", on=["GEOID","ts_hour"])
+          new["incident_count"]=new["incident_count"].fillna(0).astype("int32")
+          new["Y_label"]=(new["incident_count"]>0).astype("int8")
+
+          # varsa eski sf_crime_y.parquet ile merge (union), yeni değerler öncelikli
+          y_path = CRIME_DIR/"sf_crime_y.parquet"
+          if y_path.exists():
+              old = pd.read_parquet(y_path)
+              # union
+              both = pd.concat([old, new], ignore_index=True)
+              both = (both.sort_values(["GEOID","ts_hour"])
+                          .drop_duplicates(["GEOID","ts_hour"], keep="last"))
+              out = both
+          else:
+              out = new
+
+          # yaz: sf_crime_y.parquet
+          pq.write_table(pa.Table.from_pandas(out), y_path, compression=COMP)
+
+          # model girdisi grid: Y_label ile birlikte kaydet (tam parquet)
+          grid_path = CRIME_DIR/"sf_crime_grid_full_labeled.parquet"
+          pq.write_table(pa.Table.from_pandas(out), grid_path, compression="zstd")
+
+          print("Y_label summary:", out["Y_label"].value_counts(dropna=False).to_dict(),
+                "| rows:", len(out), "| time span:", str(out["ts_hour"].min()), "→", str(out["ts_hour"].max()))
+          PY
+          python -u make_y_labels.py
+          echo "head(sf_crime_y.parquet):"
+          python - <<'PY'
+          import os, pyarrow.parquet as pq, pandas as pd
+          p=os.path.join(os.environ["CRIME_DATA_DIR"],"sf_crime_y.parquet")
+          print(pd.read_parquet(p).head(5))
+          PY
 
       - name: 02) 911 → sf_crime_01.parquet (bulk 50k)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
@@ -245,52 +385,33 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import os, pandas as pd
-
           d = os.environ["CRIME_DATA_DIR"]
           p_pop = os.path.join(d, "sf_population.csv")
           pop = pd.read_csv(p_pop, dtype=str, low_memory=False)
-
-          # GEOID ve population kolon adlarını toparla
           cols = {c.lower(): c for c in pop.columns}
           geocol = cols.get("geoid") or cols.get("geography_id")
-          if not geocol:
-              raise SystemExit("sf_population.csv içinde GEOID/geography_id yok")
-
+          if not geocol: raise SystemExit("sf_population.csv içinde GEOID/geography_id yok")
           if "population" not in pop.columns:
               for cand in ["total_population","b01003_001e","estimate","total","value"]:
-                  if cand in pop.columns:
-                      pop.rename(columns={cand:"population"}, inplace=True)
-                      break
-
-          # Nüfusu normalize et: 12 hane -> son 10 hane
+                  if cand in pop.columns: pop.rename(columns={cand:"population"}, inplace=True); break
           pop[geocol] = pop[geocol].str.strip().str.zfill(12)
           pop["GEOID10"] = pop[geocol].str[-10:]
           pop["population"] = pd.to_numeric(pop["population"], errors="coerce").fillna(0)
           pop10 = pop.groupby("GEOID10", as_index=False)["population"].sum()
-
-          # sf_crime_03.* oku (csv varsa onu tercih et)
           p_csv  = os.path.join(d, "sf_crime_03.csv")
           p_parq = os.path.join(d, "sf_crime_03.parquet")
           if   os.path.exists(p_csv):  frame = pd.read_csv(p_csv, low_memory=False)
           elif os.path.exists(p_parq): frame = pd.read_parquet(p_parq)
           else: raise SystemExit("sf_crime_03.* bulunamadı")
-
-          if "GEOID" not in frame.columns:
-              raise SystemExit("sf_crime_03.* içinde GEOID yok")
-
+          if "GEOID" not in frame.columns: raise SystemExit("sf_crime_03.* içinde GEOID yok")
           frame["GEOID10"] = frame["GEOID"].astype(str).str.strip().str.zfill(10).str[-10:]
           before_na = frame.get("population", pd.Series([None]*len(frame))).isna().sum()
           frame = frame.drop(columns=["population"], errors="ignore").merge(pop10, how="left", on="GEOID10")
           after_na  = frame["population"].isna().sum()
           print(f"population NaN önce={before_na} sonra={after_na}")
-
           frame = frame.drop(columns=["GEOID10"], errors="ignore")
-          if os.path.exists(p_csv):
-              frame.to_csv(p_csv, index=False)
-              print("✅ population patch →", p_csv)
-          else:
-              frame.to_parquet(p_parq, index=False)
-              print("✅ population patch →", p_parq)
+          if os.path.exists(p_csv): frame.to_csv(p_csv, index=False)
+          else: frame.to_parquet(p_parq, index=False)
           PY
 
       - name: 04.b) Köprü — sf_crime_03.* üret (gerekiyorsa)
@@ -313,21 +434,19 @@ jobs:
             echo "❌ sf_crime_02.* / sf_crime.* da yok; 03 üretilemedi"; exit 2
           fi
           ls -lah "${CRIME_DATA_DIR}"/sf_crime_03.*
-          
+
       - name: Helper — pick_input function
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         shell: bash
         run: |
           cat > pick_input.sh <<'BASH'
           #!/usr/bin/env bash
-          # usage: pick_input VAR CAND1 [CAND2 ...]
           pick_input() {
             local out="$1"; shift
             local p
             for p in "$@"; do
               if [ -f "$p" ]; then
                 echo "✔ Found input: $p"
-                # Değişkeni aynı shell'de set et
                 printf -v "$out" "%s" "$p"
                 export "$out"
                 return 0
@@ -359,6 +478,7 @@ jobs:
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_04.parquet"
           OUT_CSV="${CRIME_DATA_DIR}/sf_crime_04.csv"
           test -f "$OUT_PARQ" -o -f "$OUT_CSV" || { echo "❌ Bus çıktısı yok (sf_crime_04.*)"; exit 2; }
+
       - name: 06) Tren (BART) → sf_crime_05.parquet
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
@@ -396,11 +516,7 @@ jobs:
             "${CRIME_DATA_DIR}/sf_crime_04.parquet" \
             "${CRIME_DATA_DIR}/sf_crime_04.csv" || { echo "❌ POI adımı için girdi yok"; exit 2; }
           echo "CRIME_INPUT=$CRIME_INPUT"
-      
-          # 👇 script CRIME_IN env'ini okuyorsa kullansın
           export CRIME_IN="$CRIME_INPUT"
-      
-          # 👇 script hard-coded 'crime_prediction_data/...' ararsa symlink zaten hazır (önceki adımda)
           if [ -f update_poi.py ]; then
             python -u update_poi.py
           elif [ -f pipeline_make_sf_crime_06.py ]; then
@@ -408,11 +524,9 @@ jobs:
           else
             echo "❌ POI script bulunamadı"; exit 2
           fi
-      
           OUT_PARQ="${CRIME_DATA_DIR}/sf_crime_06.parquet"
           OUT_CSV="${CRIME_DATA_DIR}/sf_crime_06.csv"
           test -f "$OUT_PARQ" -o -f "$OUT_CSV" || { echo "❌ POI çıktısı yok (sf_crime_06.*)"; exit 2; }
-
 
       - name: 08) Polis & Devlet binaları → sf_crime_07.parquet
         if: ${{ steps.gate.outputs.proceed == 'true' }}
@@ -554,7 +668,7 @@ jobs:
           python - <<'PY'
           import os, polars as pl
           d=os.environ["CRIME_DATA_DIR"]
-          for p in ["sf_crime_grid_full_labeled.parquet","risk_hourly.parquet","patrol_recs_multi.parquet","sf_crime_05.parquet","sf_crime_06.parquet","sf_crime_07.parquet","sf_crime_08.parquet"]:
+          for p in ["sf_crime_grid_full_labeled.parquet","risk_hourly.parquet","patrol_recs_multi.parquet","sf_crime_05.parquet","sf_crime_06.parquet","sf_crime_07.parquet","sf_crime_08.parquet","sf_crime_y.parquet"]:
               f=os.path.join(d,p)
               if os.path.exists(f):
                   print("=== ",p," ===")
@@ -587,7 +701,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "🔄 Full pipeline (ID-based + Parquet + Cat-Forecast) [skip ci]" || echo "No changes"
+          git commit -m "🔄 Full pipeline (ID-based + Parquet + Cat-Forecast; *_y.parquet flow) [skip ci]" || echo "No changes"
           git push || echo "Nothing to push"
 
       - name: Notify success (SendGrid HTTP)
@@ -637,6 +751,7 @@ jobs:
             echo "## Tamamlandı"
             echo "- Üretilen başlıca parquetler:"
             echo "  - sf_crime_grid_full_labeled.parquet (ID-based, Y_label=0/1)"
+            echo "  - sf_crime_y.parquet (kalıcı y-cache, güncellenir)"
             echo "  - risk_hourly.parquet, patrol_recs_multi.parquet"
             echo "  - sf_forecast_cat/ (category partitioned, horizons: ${HORIZONS})"
           } >> $GITHUB_STEP_SUMMARY
