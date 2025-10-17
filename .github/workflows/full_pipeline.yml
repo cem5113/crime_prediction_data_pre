@@ -28,7 +28,7 @@ concurrency:
 
 env:
   CRIME_DATA_DIR: crime_prediction_data_per
-  GEOID_LEN: "11"
+  GEOID_LEN: "10"
 
   # I/O davranışı
   USE_PARQUET: "1"           # tüm ara çıktı & final çıktılar parquet
@@ -236,32 +236,62 @@ jobs:
           print("✅ population → parquet:", q)
           PY
 
-      - name: 04) Nüfus → sf_crime_03.parquet (demografi + nüfus)
+      - name: 04.c) Patch — population NaN doldur (GEOID12 → GEOID10)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
-          POPULATION_PATH:  ${{ env.CRIME_DATA_DIR }}/sf_population.csv   # <-- CSV'ye çekildi
-          CENSUS_GEO_LEVEL: ${{ env.CENSUS_GEO_LEVEL }}
-          ACS_YEAR:         ${{ env.ACS_YEAR }}
-          DEMOG_WHITELIST:  ${{ env.DEMOG_WHITELIST }}
-          USE_PARQUET:      "false"                                       # opsiyonel; script zaten CSV okuyor
-          ID_BASED:         ${{ env.ID_BASED }}
-          CRIME_DATA_DIR:   ${{ env.CRIME_DATA_DIR }}
+          CRIME_DATA_DIR: ${{ env.CRIME_DATA_DIR }}
+        shell: bash
         run: |
           set -euo pipefail
-          # Script CSV bekliyor; doğrudan çalıştırıyoruz
-          if [ -f update_population.py ]; then
-            python -u update_population.py
-          elif [ -f scripts/update_population.py ]; then
-            python -u scripts/update_population.py
-          else
-            echo "❌ update_population.py bulunamadı"; exit 2
-          fi
-          # Çıktı kontrolü (varsa bilgi ver, yoksa köprü adımı devreye girecek)
-          if [ -f "${CRIME_DATA_DIR}/sf_crime_03.parquet" ] || [ -f "${CRIME_DATA_DIR}/sf_crime_03.csv" ]; then
-            echo "✅ sf_crime_03.* üretildi."
-          else
-            echo "⚠ sf_crime_03.* üretilmedi; bir sonraki köprü adımı devreye girebilir."
-          fi
+          python - <<'PY'
+          import os, pandas as pd
+
+          d = os.environ["CRIME_DATA_DIR"]
+          p_pop = os.path.join(d, "sf_population.csv")
+          pop = pd.read_csv(p_pop, dtype=str, low_memory=False)
+
+          # GEOID ve population kolon adlarını toparla
+          cols = {c.lower(): c for c in pop.columns}
+          geocol = cols.get("geoid") or cols.get("geography_id")
+          if not geocol:
+              raise SystemExit("sf_population.csv içinde GEOID/geography_id yok")
+
+          if "population" not in pop.columns:
+              for cand in ["total_population","b01003_001e","estimate","total","value"]:
+                  if cand in pop.columns:
+                      pop.rename(columns={cand:"population"}, inplace=True)
+                      break
+
+          # Nüfusu normalize et: 12 hane -> son 10 hane
+          pop[geocol] = pop[geocol].str.strip().str.zfill(12)
+          pop["GEOID10"] = pop[geocol].str[-10:]
+          pop["population"] = pd.to_numeric(pop["population"], errors="coerce").fillna(0)
+          pop10 = pop.groupby("GEOID10", as_index=False)["population"].sum()
+
+          # sf_crime_03.* oku (csv varsa onu tercih et)
+          p_csv  = os.path.join(d, "sf_crime_03.csv")
+          p_parq = os.path.join(d, "sf_crime_03.parquet")
+          if   os.path.exists(p_csv):  frame = pd.read_csv(p_csv, low_memory=False)
+          elif os.path.exists(p_parq): frame = pd.read_parquet(p_parq)
+          else: raise SystemExit("sf_crime_03.* bulunamadı")
+
+          if "GEOID" not in frame.columns:
+              raise SystemExit("sf_crime_03.* içinde GEOID yok")
+
+          frame["GEOID10"] = frame["GEOID"].astype(str).str.strip().str.zfill(10).str[-10:]
+          before_na = frame.get("population", pd.Series([None]*len(frame))).isna().sum()
+          frame = frame.drop(columns=["population"], errors="ignore").merge(pop10, how="left", on="GEOID10")
+          after_na  = frame["population"].isna().sum()
+          print(f"population NaN önce={before_na} sonra={after_na}")
+
+          frame = frame.drop(columns=["GEOID10"], errors="ignore")
+          if os.path.exists(p_csv):
+              frame.to_csv(p_csv, index=False)
+              print("✅ population patch →", p_csv)
+          else:
+              frame.to_parquet(p_parq, index=False)
+              print("✅ population patch →", p_parq)
+          PY
 
       - name: 04.b) Köprü — sf_crime_03.* üret (gerekiyorsa)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
