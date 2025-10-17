@@ -842,6 +842,7 @@ def list_files_sorted(
     if include is None:
         include = [info["path"] for info in DOWNLOADS.values() if "path" in info]
         include += [str(bdir / f"sf_crime_{i:02d}.csv") for i in range(1, 10)]
+        include += [str(bdir / "sf_crime_01L.csv")]  # ← eklendi
         include += [str(bdir / "sf_crime_y.csv"), str(bdir / "sf_crime_grid_full_labeled.csv")]
 
     # Ayrıca glob ile genişlet
@@ -981,6 +982,110 @@ def build_grid_full_labeled_from_sf_crime_y(
         st.error(f"sf_crime_grid_full_labeled oluşturulamadı: {e}")
         return None
 
+# --- sf_crime_01L üret: sf_crime_01 + (GEOID→Y_label) (YENİ) ---
+def build_sf_crime_01L_from_files(
+    path_01: Path = DATA_DIR / "sf_crime_01.csv",
+    path_grid: Path = DATA_DIR / "sf_crime_grid_full_labeled.csv",
+    out_path: Path = DATA_DIR / "sf_crime_01L.csv",
+) -> Optional[Path]:
+    try:
+        if not path_01.exists():
+            st.warning(f"sf_crime_01 yok: {path_01}")
+            return None
+        if not path_grid.exists():
+            st.warning(f"grid yok: {path_grid}")
+            return None
+
+        df01 = pd.read_csv(path_01, low_memory=False)
+        grid = pd.read_csv(path_grid, low_memory=False, dtype={"GEOID": str})
+
+        # GEOID normalize
+        df01["GEOID"] = _norm_geoid(df01["GEOID"])
+        grid["GEOID"] = _norm_geoid(grid["GEOID"])
+
+        # GEOID seviyesinde Y_label = max
+        if "Y_label" not in grid.columns:
+            st.error("grid dosyasında Y_label yok.")
+            return None
+        y_by_geoid = (grid.groupby("GEOID", as_index=False)["Y_label"].max()
+                           .rename(columns={"Y_label": "Y_label_geoid"}))
+
+        out = df01.merge(y_by_geoid, on="GEOID", how="left", validate="many_to_one")
+        out["Y_label_geoid"] = pd.to_numeric(out["Y_label_geoid"], errors="coerce").fillna(0).astype("Int64")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out.to_csv(out_path, index=False)
+        st.success(f"✅ sf_crime_01L üretildi → {out_path} (satır: {len(out)})")
+        return out_path
+    except Exception as e:
+        st.error(f"sf_crime_01L oluşturulamadı: {e}")
+        return None
+
+
+# --- sf_crime_02’yi 01L + güncel 911’den yeniden kur (YENİ) ---
+def rebuild_sf_crime_02_from_01L_and_911(
+    path_01L: Path = DATA_DIR / "sf_crime_01L.csv",
+    path_911: Path = DATA_DIR / "sf_911_last_5_year_y.csv",
+    out_path: Path = DATA_DIR / "sf_crime_02.csv",
+) -> Optional[Path]:
+    try:
+        if not path_01L.exists():
+            st.warning(f"sf_crime_01L yok: {path_01L}")
+            return None
+        if not path_911.exists():
+            st.warning(f"911 özet yok: {path_911}")
+            return None
+
+        df01L = pd.read_csv(path_01L, low_memory=False, dtype={"GEOID": str})
+        df911 = pd.read_csv(path_911, low_memory=False, dtype={"GEOID": str})
+
+        # GEOID normalize
+        df01L["GEOID"] = _norm_geoid(df01L["GEOID"])
+        df911["GEOID"]  = _norm_geoid(df911["GEOID"])
+
+        # En zengin ortak anahtarları dene
+        keys_candidates = [
+            ["GEOID", "date", "event_hour"],
+            ["GEOID", "date"],
+            ["GEOID", "datetime"],
+            ["GEOID"]
+        ]
+        # date/datetime normalize
+        if "date" in df01L.columns:
+            df01L["date"] = pd.to_datetime(df01L["date"], errors="coerce").dt.date
+        if "datetime" in df01L.columns:
+            df01L["datetime"] = pd.to_datetime(df01L["datetime"], errors="coerce")
+
+        if "date" in df911.columns:
+            df911["date"] = pd.to_datetime(df911["date"], errors="coerce").dt.date
+        if "datetime" in df911.columns:
+            df911["datetime"] = pd.to_datetime(df911["datetime"], errors="coerce")
+
+        # 911 kolon adlarını çakışmayı önlemek için sonradan suffix’leyeceğiz
+        merge_keys = None
+        for ks in keys_candidates:
+            if set(ks).issubset(df01L.columns) and set(ks).issubset(df911.columns):
+                merge_keys = ks
+                break
+        if merge_keys is None:
+            merge_keys = ["GEOID"]
+
+        out = df01L.merge(
+            df911,
+            on=merge_keys,
+            how="left",
+            suffixes=("", "_911"),
+            validate="m:1" if merge_keys != ["GEOID"] else "m:m"
+        )
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out.to_csv(out_path, index=False)
+        st.success(f"✅ sf_crime_02 (01L + 911) üretildi → {out_path} (satır: {len(out)})")
+        return out_path
+    except Exception as e:
+        st.error(f"sf_crime_02 yeniden kurulamadı: {e}")
+        return None
+
+
 # -----------------------------------------------------------------------------
 # Yardımcı: indir & önizle
 # -----------------------------------------------------------------------------
@@ -1052,11 +1157,20 @@ if st.button("📥 Verileri İndir ve Önizle (İlk 3 Satır)"):
             allow_artifact_fallback=info.get("allow_artifact", False),
             artifact_picks=info.get("artifact_picks"),
         )
-
-    build_grid_full_labeled_from_sf_crime_y(
-        src_path=DATA_DIR / "sf_crime_y.csv",
-        out_path=DATA_DIR / "sf_crime_grid_full_labeled.csv"
-    )
+    # grid zaten indiriliyor/oluşturuluyor; 01L ve 02’yi fırsat varsa üret
+    try:
+        build_sf_crime_01L_from_files(
+            path_01=DATA_DIR / "sf_crime_01.csv",
+            path_grid=DATA_DIR / "sf_crime_grid_full_labeled.csv",
+            out_path=DATA_DIR / "sf_crime_01L.csv",
+        )
+        rebuild_sf_crime_02_from_01L_and_911(
+            path_01L=DATA_DIR / "sf_crime_01L.csv",
+            path_911=DATA_DIR / "sf_911_last_5_year_y.csv",
+            out_path=DATA_DIR / "sf_crime_02.csv",
+        )
+    except Exception as e:
+        st.warning(f"01L/02 kurulum uyarısı: {e}")
     st.success("✅ İndirme tamamlandı.")
 
 
@@ -1270,14 +1384,24 @@ if st.button("⚙️ Güncelleme ve Zenginleştirme (01 → 09)"):
             ok = run_script(sp)
             all_ok = all_ok and ok
 
-        # ⬇️ PIPELINE SONRASI: sf_crime_y.csv → sf_crime_grid_full_labeled.csv üret
+        # grid zaten app içinde üretilebiliyor; 01L + 02’yi oluştur
         try:
-            build_grid_full_labeled_from_sf_crime_y(
-                src_path=DATA_DIR / "sf_crime_y.csv",
-                out_path=DATA_DIR / "sf_crime_grid_full_labeled.csv"
+            build_sf_crime_01L_from_files(
+                path_01=DATA_DIR / "sf_crime_01.csv",
+                path_grid=DATA_DIR / "sf_crime_grid_full_labeled.csv",
+                out_path=DATA_DIR / "sf_crime_01L.csv",
             )
         except Exception as e:
-            st.warning(f"grid dosyası üretimi atlandı: {e}")
+            st.warning(f"sf_crime_01L atlandı: {e}")
+
+        try:
+            rebuild_sf_crime_02_from_01L_and_911(
+                path_01L=DATA_DIR / "sf_crime_01L.csv",
+                path_911=DATA_DIR / "sf_911_last_5_year_y.csv",
+                out_path=DATA_DIR / "sf_crime_02.csv",
+            )
+        except Exception as e:
+            st.warning(f"sf_crime_02 (01L+911) atlandı: {e}")
 
         if all_ok:
             st.success("🎉 Pipeline bitti: Tüm adımlar başarıyla tamamlandı.")
