@@ -11,6 +11,14 @@ from datetime import datetime, timezone
 import matplotlib.pyplot as plt
 import numpy as np  # ▶️ eklendi: aşağıda np.nanmean vb. kullanılıyor
 
+OWNER = "cem5113"                       # ← senin kullanıcı/organizasyon adın
+REPO  = "crime_prediction_data_pre"     # ← repo adı
+REF   = "main"                           # ← tetiklenecek branch
+WORKFLOW_FILE = "full_pipeline_v2.yml"      # ← .github/workflows altındaki dosya adı
+
+# Tek yerde tanımlayalım (aşağıdaki dispatch fonksiyonları bunu kullanıyor)
+GITHUB_REPO = f"{OWNER}/{REPO}"
+GITHUB_WORKFLOW = WORKFLOW_FILE
 # --- Forensic rapor yardımcı (varsa import et, yoksa stub kullan) ---
 try:
     from scripts.forensic_report import build_forensic_report
@@ -214,7 +222,7 @@ def _render_last_run_status(container):
     except Exception as e:
         container.warning(f"Durum okunamadı: {e}")
 
-def fetch_latest_artifact_df() -> Optional[p.DataFrame]:
+def fetch_latest_artifact_df() -> Optional[pd.DataFrame]:
     """Son başarılı run’daki artifact içinden sf_crime_08.csv’yi getir."""
     try:
         runs_url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/runs?per_page=20"
