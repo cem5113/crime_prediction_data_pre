@@ -185,10 +185,10 @@ def dispatch_workflow(persist: str = "artifact", force: bool = True) -> dict:
     import json as _json
     url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW}/dispatches"
     payload = {
-        "ref": "main",
+        "ref": REF,
         "inputs": {
             "persist": persist,
-            "force": "true" if force else "false"  # 🔴 booleanlar string olmalı
+            "force": "true" if force else "false"
         }
     }
     r = requests.post(url, headers=_gh_headers(), data=_json.dumps(payload), timeout=30)
