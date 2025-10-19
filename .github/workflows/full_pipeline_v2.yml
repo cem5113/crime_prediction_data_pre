@@ -206,13 +206,50 @@ jobs:
             echo "ℹ️ ${TARGET_FILE} önceki artifact’larda bulunamadı; update_crime.py release fallback kullanacak."
           fi
             
-      # ✅ 911 özet CSV'yi geçmiş başarılı run'lardan artifact olarak çek (varsa)
+      - name: Verify update_911.py content (no-exec)
+        run: |
+          set -e
+          p="crime_prediction_data_pre/update_911.py"
+          echo "Exists? $(test -f "$p" && echo yes || echo no)  -> $p"
+          echo "---- HEAD (1..120) ----"
+          nl -ba "$p" | sed -n '1,120p'
+          echo "---- GREP _candidates ----"
+          grep -n "_candidates" -n "$p" || true
+      
+      - name: Show update_911.py being executed
+        run: |
+          set -e
+          echo "== PATH =="
+          realpath crime_prediction_data_pre/update_911.py || true
+          echo "== GIT SHA =="
+          git rev-parse HEAD
+          echo "== FIRST 220 LINES =="
+          nl -ba crime_prediction_data_pre/update_911.py | sed -n '1,220p'
+          echo "== GREP _candidates =="
+          grep -R --line-number "_candidates" || true
+          
+      - name: 01) Suç tabanı ve grid → sf_crime.csv + gridler
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        run: |
+          set -e
+          python -u update_crime.py
+
+      - name: Restore 911 summary cache
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CRIME_DATA_DIR }}/sf_911_last_5_year.csv
+          key: 911-${{ runner.os }}-${{ github.run_number }}
+          restore-keys: |
+            911-${{ runner.os }}-
+
+      # ✅ GH auth: login YOK (GH_TOKEN var)
       - name: Prefetch sf_911_last_5_year_y.csv from previous successful run (artifact)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
-          GH_TOKEN: ${{ github.token }}            # gh CLI otomatik kullanır
-          ARTIFACT_NAME: sf-crime-pipeline-output  # önceki run'da yüklediğin artifact adı
-          WORKFLOW_NAME: ${{ github.workflow }}    # örn: "Full SF Crime Pipeline v2"
+          GH_TOKEN: ${{ github.token }} # gh için non-interactive auth
+          ARTIFACT_NAME: sf-crime-pipeline-output
+          WORKFLOW_NAME: Full SF Crime Pipeline
           TARGET_FILE: sf_911_last_5_year_y.csv
           OUT_DIR: crime_prediction_data_pre
         run: |
@@ -222,7 +259,6 @@ jobs:
             echo "ℹ️ ${OUT_DIR}/${TARGET_FILE} zaten var, indirme atlandı."
             exit 0
           fi
-      
           sudo apt-get update -y >/dev/null
           sudo apt-get install -y unzip >/dev/null
           if ! command -v gh >/dev/null; then
@@ -230,26 +266,16 @@ jobs:
           fi
           gh --version || true
           gh auth status || true
-      
           mkdir -p _prev
           FOUND=""
-          # Son 10 başarılı run içinde ara; ilk bulduğunu kopyala
-          RUNS=$(gh run list -R "${GITHUB_REPOSITORY}" \
+          for RID in $(gh run list -R "${GITHUB_REPOSITORY}" \
             --workflow "${WORKFLOW_NAME}" --status success \
-            -L 10 --json databaseId -q '.[].databaseId' || true)
-      
-          if [ -z "${RUNS}" ]; then
-            echo "ℹ️ Başarılı geçmiş run bulunamadı; script kendi akışıyla devam edecek."
-            exit 0
-          fi
-      
-          for RID in ${RUNS}; do
+            -L 10 --json databaseId -q '.[].databaseId'); do
             echo "🔎 Run #$RID içinde ${TARGET_FILE} aranıyor…"
             rm -rf "_prev/$RID" && mkdir -p "_prev/$RID"
             if gh run download -R "${GITHUB_REPOSITORY}" "$RID" \
               -n "${ARTIFACT_NAME}" -D "_prev/$RID" >/dev/null 2>&1; then
-              # tam ad ile ve klasörlü varyantla dene
-              F=$(find "_prev/$RID" -type f \( -iname "${TARGET_FILE}" -o -iname "crime_prediction_data_pre/${TARGET_FILE}" \) | head -n1 || true)
+              F=$(find "_prev/$RID" -type f -iname "${TARGET_FILE}" | head -n1 || true)
               if [ -n "${F:-}" ]; then
                 cp -f "$F" "${OUT_DIR}/${TARGET_FILE}"
                 echo "✅ Bulundu ve kopyalandı: $F → ${OUT_DIR}/${TARGET_FILE}"
@@ -260,11 +286,27 @@ jobs:
               echo " ↪️ Artifact indirilemedi veya yok (#$RID)."
             fi
           done
-      
           if [ -z "${FOUND}" ]; then
-            echo "ℹ️ ${TARGET_FILE} önceki artifact’larda bulunamadı; update_911.py kendi akışıyla devam edecek."
+            echo "ℹ️ ${TARGET_FILE} önceki artifact’larda bulunamadı; script release fallback kullanacak."
           fi
 
+      - name: 02) 911 → sf_crime_01.csv (bulk 50k)
+        if: ${{ steps.gate.outputs.proceed == 'true' }}
+        working-directory: ${{ github.workspace }}/crime_prediction_data_pre
+        env:
+          SF_SODA_FETCH_STRATEGY: ${{ env.SF_SODA_FETCH_STRATEGY }}
+          SF_SODA_PAGE_LIMIT: ${{ env.SF_SODA_PAGE_LIMIT }}
+          SF_SODA_MAX_PAGES: ${{ env.SF_SODA_MAX_PAGES }}
+          SF911_API_URL: ${{ env.SF911_API_URL }}
+          SF911_AGENCY_FILTER: ${{ env.SF911_AGENCY_FILTER }}
+          SF911_API_TOKEN: ${{ env.SF911_API_TOKEN }}
+          SOCS_APP_TOKEN: ${{ env.SOCS_APP_TOKEN }}
+          BACKFILL_DAYS: ${{ env.BACKFILL_DAYS }}
+        run: |
+          set -e
+          echo "PWD: $(pwd)"
+          ls -lah | sed -n '1,50p'
+          python -u update_911.py
           
       - name: Restore 311 summary cache
         if: ${{ steps.gate.outputs.proceed == 'true' }}
