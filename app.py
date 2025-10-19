@@ -195,7 +195,7 @@ def dispatch_workflow(persist: str = "artifact", force: bool = True) -> dict:
     return {"ok": r.status_code in (204, 201), "status": r.status_code, "text": r.text}
 
 def _get_last_run_by_workflow():
-    """full_pipeline.yml için en son run (1 adet)"""
+    """full_pipeline_v2.yml için en son run (1 adet)"""
     url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW}/runs?per_page=1"
     r = requests.get(url, headers=_gh_headers(), timeout=30)
     if r.status_code != 200:
