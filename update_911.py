@@ -161,18 +161,24 @@ RELEASE_911_CANDIDATES = [
     RELEASE_911_URL_BASE,  # yedek:   .csv
 ]
 
-def _pick_working_release_url(candidates):
-    import requests
-    for url in candidates:
+def _pick_working_release_url(candidates: list[str]) -> str:
+    """
+    Aday release URL'lerini sırayla dener; erişilebilir ve LFS pointer olmayan
+    ilkini döndürür. Hiçbiri olmazsa RuntimeError fırlatır.
+    """
+    for u in candidates:
+        if not u:
+            continue
         try:
-            if requests.head(url).status_code == 200:
-                return url
-        except:
-            pass
-    raise Exception("Hiçbir URL çalışmıyor.")
-
-# 2) Release fallback (Y URL'leri öncelikli)
-release_url = _pick_working_release_url(_candidates)
+            r = requests.get(u, timeout=20)  # allow_redirects=True default True
+            if r.ok and r.content and len(r.content) > 200 and b"git-lfs" not in r.content[:200].lower():
+                log(f"⬇️ Release kaynağı seçildi: {u}")
+                return u
+            else:
+                log(f"⚠️ Uygun değil (boş/küçük/LFS pointer olabilir): {u}")
+        except Exception as e:
+            log(f"⚠️ Ulaşılamadı: {u} ({e})")
+    raise RuntimeError("❌ Hiçbir release 911 URL’i erişilebilir değil.")
 
 def _pick_working_release_url(candidates: list[str]) -> str:
     """
@@ -603,7 +609,7 @@ if base_csv_path is not None:
     log(f"✅ Yerel 911 özet kaydedildi → {local_summary_path} & {y_summary_path} (satır: {len(final_911)})")
 else:
     # 2) Release fallback (Y URL'leri öncelikli)
-    release_url = _pick_working_release_url(RAW_911_URL_CANDIDATES)
+    release_url = _pick_working_release_url(RELEASE_911_CANDIDATES)
     final_911 = summary_from_release(release_url, min_date=five_years_ago)
     save_911_both(final_911)
     log(f"✅ Release özet kaydedildi → {local_summary_path} & {y_summary_path} (satır: {len(final_911)})")
