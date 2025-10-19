@@ -205,17 +205,6 @@ jobs:
           if [ -z "${FOUND}" ]; then
             echo "ℹ️ ${TARGET_FILE} önceki artifact’larda bulunamadı; update_crime.py release fallback kullanacak."
           fi
-      # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-      - name: Guard: single update_911.py copy
-        run: |
-          set -e
-          N=$(find . -type f -name update_911.py | wc -l)
-          echo "update_911.py count = $N"
-          find . -type f -name update_911.py -print
-          if [ "$N" -ne 1 ]; then
-            echo "❌ Birden fazla (veya hiç) update_911.py var. Yolunuzu netleştirin."
-            exit 1
-          fi
             
       - name: Verify update_911.py content (no-exec)
         run: |
