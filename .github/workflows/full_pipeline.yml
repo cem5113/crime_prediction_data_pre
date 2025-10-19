@@ -68,12 +68,7 @@ jobs:
           set -e
           echo "GIT SHA:" $(git rev-parse HEAD)
           grep -R --line-number "_candidates" || true
-
-      # 🔽 Asıl işlem
-      - name: Update 911 data
-        run: |
-          python crime_prediction_data_pre/update_911.py
-
+          
       - name: Ensure LFS objects
         run: |
           git lfs install
@@ -209,21 +204,26 @@ jobs:
             echo "ℹ️ ${TARGET_FILE} önceki artifact’larda bulunamadı; update_crime.py release fallback kullanacak."
           fi
       # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-      - name: Verify imported update_911 path
+      - name: Guard: single update_911.py copy
         run: |
-          python - << 'PY'
-          import importlib.util, os, sys
-          p = "crime_prediction_data_pre/update_911.py"
-          print("Exists?", os.path.exists(p), p)
-          spec = importlib.util.spec_from_file_location("u911", p)
-          m = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(m)
-          print("Loaded from:", m.__file__)
-          print("Has _candidates symbol?", hasattr(m, "_candidates"))
-          print("Function source head:")
-          import inspect
-          print(inspect.getsource(m._pick_working_release_url).splitlines()[0])
-          PY
+          set -e
+          N=$(find . -type f -name update_911.py | wc -l)
+          echo "update_911.py count = $N"
+          find . -type f -name update_911.py -print
+          if [ "$N" -ne 1 ]; then
+            echo "❌ Birden fazla (veya hiç) update_911.py var. Yolunuzu netleştirin."
+            exit 1
+          fi
+            
+      - name: Verify update_911.py content (no-exec)
+        run: |
+          set -e
+          p="crime_prediction_data_pre/update_911.py"
+          echo "Exists? $(test -f "$p" && echo yes || echo no)  -> $p"
+          echo "---- HEAD (1..120) ----"
+          nl -ba "$p" | sed -n '1,120p'
+          echo "---- GREP _candidates ----"
+          grep -n "_candidates" -n "$p" || true
       
       - name: Show update_911.py being executed
         run: |
@@ -299,7 +299,6 @@ jobs:
             echo "ℹ️ ${TARGET_FILE} önceki artifact’larda bulunamadı; script release fallback kullanacak."
           fi
 
-      # 911: gün gün yerine bulk (limit=50k)
       - name: 02) 911 → sf_crime_01.csv (bulk 50k)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         env:
@@ -313,8 +312,8 @@ jobs:
           BACKFILL_DAYS: ${{ env.BACKFILL_DAYS }}
         run: |
           set -e
-          python -u update_911.py
-
+          python -u crime_prediction_data_pre/update_911.py
+    
       - name: Restore 311 summary cache
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         uses: actions/cache@v4
