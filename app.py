@@ -146,7 +146,7 @@ os.environ["DEMOG_WHITELIST"] = st.secrets.get(
 
 # --- GitHub Actions entegrasyonu (manual tetik & artifact indirme) ---
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "cem5113/crime_prediction_data_pre")  # owner/repo
-GITHUB_WORKFLOW = os.environ.get("GITHUB_WORKFLOW", "full_pipeline.yml")  # .github/workflows/...
+GITHUB_WORKFLOW = os.environ.get("GITHUB_WORKFLOW", "full_pipeline_v2.yml")  # .github/workflows/...
 
 def _gh_headers():
     token = st.secrets.get("GH_TOKEN") or os.environ.get("GH_TOKEN")
