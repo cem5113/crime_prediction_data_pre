@@ -292,6 +292,7 @@ jobs:
 
       - name: 02) 911 → sf_crime_01.csv (bulk 50k)
         if: ${{ steps.gate.outputs.proceed == 'true' }}
+        working-directory: ${{ github.workspace }}/crime_prediction_data_pre
         env:
           SF_SODA_FETCH_STRATEGY: ${{ env.SF_SODA_FETCH_STRATEGY }}
           SF_SODA_PAGE_LIMIT: ${{ env.SF_SODA_PAGE_LIMIT }}
@@ -303,8 +304,10 @@ jobs:
           BACKFILL_DAYS: ${{ env.BACKFILL_DAYS }}
         run: |
           set -e
-          python -u crime_prediction_data_pre/update_911.py
-    
+          echo "PWD: $(pwd)"
+          ls -lah | sed -n '1,50p'
+          python -u update_911.py
+          
       - name: Restore 311 summary cache
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         uses: actions/cache@v4
