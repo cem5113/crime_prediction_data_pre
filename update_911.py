@@ -123,10 +123,20 @@ _candidates = globals().get("RAW_911_URL_CANDIDATES", None)
 if not isinstance(_candidates, list) or not any(bool(x) for x in _candidates):
     _candidates = [
         RAW_911_URL_ENV or "",
-        "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.0/sf_911_last_5_year_y.csv",
-        "https://github.com/cem5113/crime_prediction_data_pre/releases/download/v1.0.0/sf_911_last_5_year.csv",
+        "https://github.com/cem5113/crime_prediction_data_pre/releases/latest/download/sf_911_last_5_year_y.csv",
+        "https://github.com/cem5113/crime_prediction_data_pre/releases/latest/download/sf_911_last_5_year.csv",
     ]
     globals()["RAW_911_URL_CANDIDATES"] = _candidates  # isteğe bağlı: global’e geri yaz
+
+def _pick_working_release_url(candidates):
+    import requests
+    for url in candidates:
+        try:
+            if requests.head(url).status_code == 200:
+                return url
+        except:
+            pass
+    raise Exception("Hiçbir URL çalışmıyor.")
 
 # 2) Release fallback (Y URL'leri öncelikli)
 release_url = _pick_working_release_url(_candidates)
