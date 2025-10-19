@@ -1,4 +1,4 @@
-name: Full SF Crime Pipeline
+name: Full SF Crime Pipeline v2
 on:
   schedule:
     - cron: "0 14,15 * * *" # SF 07:00: 14:00 UTC (yaz), 15:00 UTC (kış)
