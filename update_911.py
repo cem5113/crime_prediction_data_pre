@@ -19,7 +19,39 @@ except Exception:
 # =========================
 # LOG / HELPERS
 # =========================
+def _download_first_ok(urls, save_path):
+    import requests, os
+    for u in urls:
+        if not u:
+            continue
+        try:
+            r = requests.get(u, timeout=45, allow_redirects=True)
+            if r.status_code == 200 and r.content:
+                os.makedirs(os.path.dirname(os.path.abspath(save_path)) or ".", exist_ok=True)
+                tmp = save_path + ".tmp"
+                with open(tmp, "wb") as f:
+                    f.write(r.content)
+                os.replace(tmp, save_path)
+                print(f"✅ Release’ten çekildi: {u}")
+                return True
+            else:
+                print(f"ℹ️ Release yanıtı: {u} -> {r.status_code}")
+        except Exception as e:
+            print(f"⚠️ Release denemesi başarısız: {u} ({e})")
+    return False
 
+def load_existing_raw_or_seed(raw_path: str) -> pd.DataFrame:
+    """Önce release’ten (_y → base) indirmeyi dene; yoksa yerel/seed; en sonunda API."""
+    # 0) Release’ten indirmeyi dene (önce _y, sonra base)
+    if not os.path.exists(raw_path):
+        got = _download_first_ok(RELEASE_911_CANDIDATES, raw_path)
+        if got:
+            try:
+                df_rel = pd.read_csv(raw_path, dtype={"GEOID": str}, low_memory=False)
+                print(f"📥 Release ham dosya yüklendi: {os.path.abspath(raw_path)}")
+                return df_rel
+            except Exception as e:
+                print(f"⚠️ Release dosyası okuma hatası: {e} → diğer yollara düşülüyor.")
 def log(msg: str):
     print(msg, flush=True)
 
@@ -118,15 +150,16 @@ IS_V3           = "/api/v3/views/" in SF911_API_URL
 V3_PAGE_LIMIT   = int(os.getenv("SF_V3_PAGE_LIMIT", "1000"))
 SF911_RECENT_HOURS = int(os.getenv("SF911_RECENT_HOURS", "6"))
 
+# ---- 911 release URL adayları ----
 RAW_911_URL_ENV = os.getenv("RAW_911_URL", "").strip()
-_candidates = globals().get("RAW_911_URL_CANDIDATES", None)
-if not isinstance(_candidates, list) or not any(bool(x) for x in _candidates):
-    _candidates = [
-        RAW_911_URL_ENV or "",
-        "https://github.com/cem5113/crime_prediction_data_pre/releases/latest/download/sf_911_last_5_year_y.csv",
-        "https://github.com/cem5113/crime_prediction_data_pre/releases/latest/download/sf_911_last_5_year.csv",
-    ]
-    globals()["RAW_911_URL_CANDIDATES"] = _candidates  # isteğe bağlı: global’e geri yaz
+RELEASE_911_URL_Y     = "https://github.com/cem5113/crime_prediction_data_pre/releases/latest/download/sf_911_last_5_year_y.csv"
+RELEASE_911_URL_BASE  = "https://github.com/cem5113/crime_prediction_data_pre/releases/latest/download/sf_911_last_5_year.csv"
+
+RELEASE_911_CANDIDATES = [
+    RAW_911_URL_ENV or "",
+    RELEASE_911_URL_Y,     # öncelik: _y.csv
+    RELEASE_911_URL_BASE,  # yedek:   .csv
+]
 
 def _pick_working_release_url(candidates):
     import requests
