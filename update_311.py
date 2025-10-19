@@ -14,6 +14,25 @@ try:
 except Exception:
     SF_TZ = None
 
+def _download_first_ok(urls, save_path):
+    import requests, os
+    for u in urls:
+        if not u:
+            continue
+        try:
+            r = requests.get(u, timeout=30)
+            if r.status_code == 200 and r.content:
+                os.makedirs(os.path.dirname(os.path.abspath(save_path)) or ".", exist_ok=True)
+                tmp = save_path + ".tmp"
+                with open(tmp, "wb") as f:
+                    f.write(r.content)
+                os.replace(tmp, save_path)
+                print(f"✅ Release’ten çekildi: {u}")
+                return True
+        except Exception as e:
+            print(f"⚠️ Release denemesi başarısız: {u} ({e})")
+    return False
+
 def _to_date_series(x):
     """UTC -> SF yerel tarihe dönüştür (varsa); olmazsa naive tarihe düş."""
     try:
@@ -64,9 +83,15 @@ RAW_311_NAME_Y = os.getenv("RAW_311_NAME_Y", "sf_311_last_5_years_y.csv")
 AGG_BASENAME   = os.getenv("AGG_311_NAME",   "sf_311_last_5_years.csv")
 AGG_ALIAS      = os.getenv("AGG_311_ALIAS",  "sf_311_last_5_years_3h.csv")
 
-# Eski ad uyumluluğu (opsiyonel kopya)
-LEGACY_311_Y = os.getenv("LEGACY_311_Y", "sf_311_last_5_year_y.csv")
-LEGACY_311   = os.getenv("LEGACY_311",   "sf_311_last_5_year.csv")
+# (Opsiyonel) Release’tan çekilecek uzak link adayları
+RAW_311_URL_ENV = os.getenv("RAW_311_URL", "").strip()
+REMOTE_311_URL_CANDIDATES = [
+    RAW_311_URL_ENV or "",
+    # Önce ham (_y) varsa onu dene:
+    "https://github.com/cem5113/crime_prediction_data_pre/releases/latest/download/sf_311_last_5_years_y.csv",
+    # Sonra 3 saatlik özet:
+    "https://github.com/cem5113/crime_prediction_data_pre/releases/latest/download/sf_311_last_5_years.csv",
+]
 
 # Socrata dataset
 DATASET_BASE = os.getenv("SF311_DATASET", "https://data.sfgov.org/resource/vw6y-z8j6.json")
@@ -247,12 +272,17 @@ def resolve_existing_raw_path():
     return preferred
 
 def load_existing_raw_or_seed(raw_path: str) -> pd.DataFrame:
-    """Önce _y dosyasını yükle; yoksa repo’daki base CSV ham ise seed olarak kullan."""
-    # 1) _y varsa onu yükle
-    if os.path.exists(raw_path):
-        df = pd.read_csv(raw_path, dtype={"GEOID": str}, low_memory=False)
-        print(f"📥 _y ham dosya yüklendi: {os.path.abspath(raw_path)}")
-        return df
+    """Önce release’ten indirmeyi dene; yoksa _y dosyasını yükle; o da yoksa base ham seed → en son API."""
+    # 0) Release’ten indirmeyi dene (yoksa diğer yollara düş)
+    if not os.path.exists(raw_path):
+        got = _download_first_ok(REMOTE_311_URL_CANDIDATES, raw_path)
+        if got:
+            try:
+                df_rel = pd.read_csv(raw_path, dtype={"GEOID": str}, low_memory=False)
+                print(f"📥 Release ham dosya yüklendi: {os.path.abspath(raw_path)}")
+                return df_rel
+            except Exception as e:
+                print(f"⚠️ Release dosyası okuma hatası: {e} → diğer yollara düşülüyor.")
 
     # 2) Repo base (ham ise) → seed
     base_csv = os.path.join(SAVE_DIR, AGG_BASENAME)
