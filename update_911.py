@@ -170,25 +170,6 @@ def _pick_working_release_url(candidates: list[str]) -> str:
         if not u:
             continue
         try:
-            r = requests.get(u, timeout=20)  # allow_redirects=True default True
-            if r.ok and r.content and len(r.content) > 200 and b"git-lfs" not in r.content[:200].lower():
-                log(f"⬇️ Release kaynağı seçildi: {u}")
-                return u
-            else:
-                log(f"⚠️ Uygun değil (boş/küçük/LFS pointer olabilir): {u}")
-        except Exception as e:
-            log(f"⚠️ Ulaşılamadı: {u} ({e})")
-    raise RuntimeError("❌ Hiçbir release 911 URL’i erişilebilir değil.")
-
-def _pick_working_release_url(candidates: list[str]) -> str:
-    """
-    Aday release URL'lerini sırayla dener; erişilebilir ve LFS pointer olmayan
-    ilkini döndürür. Hiçbiri olmazsa RuntimeError fırlatır.
-    """
-    for u in candidates:
-        if not u:
-            continue
-        try:
             r = requests.get(u, timeout=20)
             # Git LFS pointer'ları genelde çok küçük olur ve başında 'git-lfs' geçer
             if r.ok and r.content and len(r.content) > 200 and b"git-lfs" not in r.content[:200].lower():
