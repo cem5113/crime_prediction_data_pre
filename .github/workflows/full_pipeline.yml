@@ -48,10 +48,31 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (with LFS)
+      - name: Checkout (with LFS, pinned to commit)
         uses: actions/checkout@v4
         with:
           lfs: true
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+          clean: true
+
+      # 🧹 Temizlik adımı: eski pycache ve kalıntıları sil
+      - name: Clean workspace (one-off debug)
+        run: |
+          rm -rf crime_prediction_data_pre/__pycache__ || true
+          find . -name "__pycache__" -type d -exec rm -rf {} +
+
+      # 🧾 Opsiyonel: debug için doğrulama
+      - name: Verify file & commit
+        run: |
+          set -e
+          echo "GIT SHA:" $(git rev-parse HEAD)
+          grep -R --line-number "_candidates" || true
+
+      # 🔽 Asıl işlem
+      - name: Update 911 data
+        run: |
+          python crime_prediction_data_pre/update_911.py
 
       - name: Ensure LFS objects
         run: |
@@ -188,8 +209,34 @@ jobs:
             echo "ℹ️ ${TARGET_FILE} önceki artifact’larda bulunamadı; update_crime.py release fallback kullanacak."
           fi
       # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-      # ---- PIPELINE ----
+      - name: Verify imported update_911 path
+        run: |
+          python - << 'PY'
+          import importlib.util, os, sys
+          p = "crime_prediction_data_pre/update_911.py"
+          print("Exists?", os.path.exists(p), p)
+          spec = importlib.util.spec_from_file_location("u911", p)
+          m = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(m)
+          print("Loaded from:", m.__file__)
+          print("Has _candidates symbol?", hasattr(m, "_candidates"))
+          print("Function source head:")
+          import inspect
+          print(inspect.getsource(m._pick_working_release_url).splitlines()[0])
+          PY
+      
+      - name: Show update_911.py being executed
+        run: |
+          set -e
+          echo "== PATH =="
+          realpath crime_prediction_data_pre/update_911.py || true
+          echo "== GIT SHA =="
+          git rev-parse HEAD
+          echo "== FIRST 220 LINES =="
+          nl -ba crime_prediction_data_pre/update_911.py | sed -n '1,220p'
+          echo "== GREP _candidates =="
+          grep -R --line-number "_candidates" || true
+          
       - name: 01) Suç tabanı ve grid → sf_crime.csv + gridler
         if: ${{ steps.gate.outputs.proceed == 'true' }}
         run: |
