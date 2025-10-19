@@ -44,7 +44,7 @@ NEIGHBOR_RADIUS_M = float(os.getenv("NEIGHBOR_RADIUS_M", "500"))
 # ➜ İstediğin akış: 1) Artifact'tan sf_crime_y.csv, 2) releases/latest sf_crime.csv
 CRIME_BASE_URL = os.getenv(
     "CRIME_CSV_URL",
-    "https://github.com/cem5113/crime_prediction_data_pre/releases/latest/download/v2.0.0/sf_crime.csv"  # Fallback
+    "https://raw.githubusercontent.com/cem5113/crime_prediction_data_pre/main/sf_crime.csv"  # Fallback
 )
 CRIME_API_URL = os.getenv("CRIME_API_URL", "https://data.sfgov.org/resource/wg3w-h783.json")
 SFCRIME_APP_TOKEN = os.getenv("SFCRIME_API_TOKEN", "")
