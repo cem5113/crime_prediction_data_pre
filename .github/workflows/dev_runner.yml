@@ -58,7 +58,7 @@ jobs:
       - name: Restore last-good snapshot (from Full SF Crime Pipeline)
         uses: dawidd6/action-download-artifact@v3
         with:
-          workflow: full_pipeline.yml
+          workflow: full_pipeline_v2.yml
           workflow_conclusion: success
           name: sf-crime-pipeline-output
           path: last_good
