@@ -1,7 +1,7 @@
 name: Full SF Crime Pipeline v2
+run-name: Full SF Crime Pipeline v2 • persist=${{ inputs.persist || 'artifact' }} • force=${{ inputs.force || true }}
+
 on:
-  schedule:
-    - cron: "0 14,15 * * *" # SF 07:00: 14:00 UTC (yaz), 15:00 UTC (kış)
   workflow_dispatch:
     inputs:
       persist:
@@ -16,6 +16,8 @@ on:
       top_k:
         description: "Stacking: her saat dilimi için önerilecek GEOID sayısı"
         default: "50"
+  schedule:
+    - cron: "0 14,15 * * *" # SF 07:00: 14:00 UTC (yaz), 15:00 UTC (kış)
 
 permissions:
   actions: read
